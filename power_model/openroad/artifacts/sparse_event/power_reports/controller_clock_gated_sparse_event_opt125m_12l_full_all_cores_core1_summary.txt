@@ -1,0 +1,10 @@
+core=1
+gate_seconds=953
+power_seconds=252
+vcd_bytes=1187334096
+CONTROLLER_REPLAY_SUMMARY {"cycles":12548624,"sleep_cycles":1568975,"sleep_transitions":9626,"completed_sleep_episodes":4813,"open_sleep_episode_cycles":0,"descriptor_write_cycles":75194,"count_write_cycles":4358315,"safety_violations":0}
+Annotated 13207 pin activities.
+vcd         13207
+unannotated     0
+Total                3.814592856e-05 5.085426437e-06 4.297218368e-07 4.366107532e-05 100.0%
+

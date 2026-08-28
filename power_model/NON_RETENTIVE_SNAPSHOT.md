@@ -8,6 +8,9 @@ retention-state modeling is introduced.
 - ONNXim instrumentation and causal predictor integration in `src/`
 - synthesized controller RTL, clock gating, and replay testbenches in `rtl/`
 - OpenROAD synthesis, timing, and activity-based power scripts
+- exact final sparse-event controller netlist, synthesized SDC, synthesis/STA
+  reports, workload power/annotation reports, and immutable ORFS image digest
+  under `openroad/artifacts/sparse_event/`
 - HSPICE deck generators and compact measured energy curves
 - exact evaluated workload/model-list configurations
 - strict ONNX operator audits, component summaries, and available gross/net
@@ -21,6 +24,10 @@ Raw controller CSV traces, VCD/FST activity files, HSPICE listing/deck outputs,
 third-party ASAP7 libraries, synthesized netlists, and verbose power logs are
 generated artifacts and are excluded by `.gitignore`. They remain local and can
 be regenerated with the checked-in scripts and configurations.
+
+The final sparse-event controller netlist is the one deliberate exception: it
+is retained as a compact, checksummed reproducibility artifact. Large SA
+netlists and binary ODB stage databases remain excluded.
 
 ## Host and Docker Consolidation
 

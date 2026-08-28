@@ -1,0 +1,61 @@
+{
+  "version": 2,
+  "objective": "A fifteen-model suite with only source-supported execution; large-model representative-layer results are labeled separately from end-to-end results",
+  "acceptance_policy": {
+    "onnx_models": "Strict operator audit pass, no unsupported grouped convolution, successful ONNXim completion, component validation pass, and exact controller RTL replay with zero safety violations",
+    "language_models": "Full-model execution for OPT-125M validation; larger models are representative-layer characterization unless explicitly run with every architectural layer",
+    "reduced_inputs": "Prompt/output reduction is a workload sensitivity parameter and must not be described as full production traffic",
+    "rejected_models": "Never count a model whose meaningful operators become zero-work Dummy operations"
+  },
+  "end_to_end_onnx_candidates": [
+    "alexnet",
+    "resnet18",
+    "resnet34",
+    "resnet50",
+    "resnet101",
+    "vgg11",
+    "vgg16",
+    "vgg19",
+    "wide_resnet50_2"
+  ],
+  "transformer_candidates": [
+    {
+      "id": "opt_125m_12l_full",
+      "representation": "full_12_layer",
+      "status": "running_validation"
+    },
+    {
+      "id": "opt_125m_12l_single",
+      "representation": "representative_layer_control",
+      "status": "pending_matched_control"
+    },
+    {
+      "id": "opt_1_3b",
+      "representation": "representative_layer",
+      "status": "eligible_only_if_full_vs_single_validation_passes"
+    },
+    {
+      "id": "llama3_8b",
+      "representation": "representative_layer",
+      "status": "eligible_only_if_full_vs_single_validation_passes"
+    },
+    {
+      "id": "bert_question_answering",
+      "representation": "optimized_onnx_candidate",
+      "status": "requires_generation_strict_audit_and_completion_validation"
+    },
+    {
+      "id": "gpt2",
+      "representation": "optimized_onnx_candidate",
+      "status": "requires_generation_strict_audit_and_completion_validation"
+    }
+  ],
+  "rejected": {
+    "mobilenet_v2": "grouped/depthwise convolution is not source-supported by the current ConvWS path",
+    "squeezenet": "Concat is unmodeled",
+    "densenet": "BatchNormalization, Concat, Relu, and ReorderInput are unmodeled",
+    "inception": "Concat is unmodeled",
+    "googlenet": "Concat is unmodeled"
+  },
+  "suite_freeze_rule": "Do not claim fifteen accepted models until fifteen entries independently satisfy their applicable acceptance policy"
+}

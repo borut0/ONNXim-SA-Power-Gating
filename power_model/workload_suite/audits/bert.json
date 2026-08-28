@@ -1,0 +1,34 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. Also reject grouped/depthwise Conv because the current weight-stationary ConvWS source marks that path unsupported and it fails runtime SRAM allocation validation. A pass still requires ONNXim initialization/completion and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "Cast": 3
+  },
+  "modeled_operator_counts": {
+    "Attention": 24,
+    "BiasGelu": 24,
+    "EmbedLayerNormalization": 1,
+    "MatMul": 73,
+    "SkipLayerNormalization": 48
+  },
+  "name": "bert",
+  "node_count": 177,
+  "operator_counts": {
+    "Add": 1,
+    "Attention": 24,
+    "BiasGelu": 24,
+    "Cast": 3,
+    "EmbedLayerNormalization": 1,
+    "MatMul": 73,
+    "SkipLayerNormalization": 48,
+    "Split": 1,
+    "Squeeze": 2
+  },
+  "path": "models/bert/bert.onnx",
+  "strict_operator_audit_pass": false,
+  "unmodeled_operator_counts": {
+    "Add": 1,
+    "Split": 1,
+    "Squeeze": 2
+  },
+  "unsupported_grouped_convolution_count": 0
+}

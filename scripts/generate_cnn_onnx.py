@@ -17,27 +17,33 @@ size_list = [1, 2, 4, 8, 16, 32]
 
 HOME = os.getenv("ONNXIM_HOME", default="../")
 parser = argparse.ArgumentParser(prog = 'ONNX generator')
-parser.add_argument('--model', required=True, help="resnet18, resnet50, alexnet, vgg16, inception")
+parser.add_argument(
+  '--model', required=True,
+  help="resnet18/34/50/101, alexnet, vgg11/16/19, and other listed torchvision models")
 parser.add_argument('--weight', type=int, default=1, help="export weight, defulat=True")
 args = parser.parse_args()
 
 torchvision_models = {
-  'resnet18' : models.resnet18(),
-  'resnet50' : models.resnet50(),
-  'alexnet' : models.alexnet(),
-  'vgg16' :  models.vgg16(),
-  'squeezenet' : models.squeezenet1_0(),
-  'densenet' :  models.densenet161(),
-  'inception' : models.inception_v3(),
-  'googlenet' : models.googlenet(),
-  'shufflenet' : models.shufflenet_v2_x1_0(),
-  'mobilenet' : models.mobilenet_v2(),
-  'resnext50_32x4d' : models.resnext50_32x4d(),
-  'wide_resnet50_2' : models.wide_resnet50_2(),
-  'mnasnet' :  models.mnasnet1_0(),
+  'resnet18' : models.resnet18,
+  'resnet34' : models.resnet34,
+  'resnet50' : models.resnet50,
+  'resnet101' : models.resnet101,
+  'alexnet' : models.alexnet,
+  'vgg11' : models.vgg11,
+  'vgg16' : models.vgg16,
+  'vgg19' : models.vgg19,
+  'squeezenet' : models.squeezenet1_0,
+  'densenet' : models.densenet161,
+  'inception' : models.inception_v3,
+  'googlenet' : models.googlenet,
+  'shufflenet' : models.shufflenet_v2_x1_0,
+  'mobilenet' : models.mobilenet_v2,
+  'resnext50_32x4d' : models.resnext50_32x4d,
+  'wide_resnet50_2' : models.wide_resnet50_2,
+  'mnasnet' : models.mnasnet1_0,
 }
 
-model = torchvision_models[args.model]
+model = torchvision_models[args.model]()
 batch_size = 1
 if args.model != 'inception':
   input = torch.randn(1, 3, 224, 224, requires_grad=True)

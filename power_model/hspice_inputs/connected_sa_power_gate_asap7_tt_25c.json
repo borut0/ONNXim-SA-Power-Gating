@@ -1,0 +1,170 @@
+{
+  "status": "preliminary_direct_small_block_characterization",
+  "technology": "ASAP7 TT",
+  "temperature_c": 25,
+  "supply_v": 0.7,
+  "load_model": {
+    "source": "Yosys-mapped connected ws_array_1x1 netlist",
+    "standard_cell_models": "ASAP7 xAct3D extracted RVT subcircuits",
+    "mapped_instances": 2225,
+    "missing_cells": 0,
+    "missing_pin_connections": 0
+  },
+  "sleep_switch": {
+    "topology": "lumped PMOS header",
+    "device_model": "ASAP7 pmos_rvt",
+    "unit_l_nm": 20,
+    "unit_w_nm": 81,
+    "unit_nfin": 3,
+    "multiplicity": 83,
+    "control_slew_ps": 50,
+    "sizing_basis": "rounded per-PE share of the 16x16 5%-drop current-derived multiplicity"
+  },
+  "boundary_and_state": {
+    "state": "reset-zero after array drain",
+    "clock": "stopped low before sleep",
+    "top_level_inputs": "all clamped low before sleep",
+    "retention": false
+  },
+  "direct_measurements": {
+    "on_static_power_w": 3.526516e-7,
+    "off_power_w": 3.8979e-9,
+    "off_virtual_rail_v": 0.0071290,
+    "minimum_virtual_rail_v": 0.0071227,
+    "entry_latency_s": 7.2927e-6,
+    "wake_latency_s": 4.773649e-10,
+    "entry_vdd_energy_j": 1.46460e-14,
+    "entry_control_abs_energy_j": 3.1672e-15,
+    "wake_vdd_energy_j": 1.3934e-12,
+    "wake_control_abs_energy_j": 1.9677e-15,
+    "wake_peak_current_a": 0.0067639
+  },
+  "direct_4x4_latency_measurements": {
+    "mapped_instances": 33858,
+    "header_multiplicity": 1326,
+    "on_static_power_w": 6.6655e-6,
+    "off_power_w": 6.18084e-8,
+    "off_virtual_rail_v": 0.0125494,
+    "minimum_virtual_rail_v": 0.0125376,
+    "entry_latency_s": 7.6146e-6,
+    "wake_latency_s": 4.467672e-10,
+    "wake_peak_current_a": 0.1067399,
+    "entry_vdd_energy_j": 2.463262e-13,
+    "entry_control_abs_energy_j": 5.05241e-14,
+    "wake_vdd_energy_j": 2.08040e-11,
+    "wake_control_abs_energy_j": 3.15307e-14,
+    "transition_energy_status": "final_threshold_aligned"
+  },
+  "measured_1x1_to_4x4_scaling": {
+    "pe_count_ratio": 16.0,
+    "off_power_ratio": 15.856846,
+    "wake_peak_current_ratio": 15.780822,
+    "entry_total_energy_ratio": 16.664625,
+    "wake_total_energy_ratio": 14.931928,
+    "entry_latency_ratio": 1.044140,
+    "wake_latency_ratio": 0.935903,
+    "interpretation": "fine-step off power, peak current, and threshold-aligned transition energies scale near the 16x PE-count ratio"
+  },
+  "direct_1x1_nonzero_state_measurements": {
+    "on_static_power_w": 3.439576e-7,
+    "off_power_w": 3.8804e-9,
+    "off_virtual_rail_v": 0.0103925,
+    "minimum_virtual_rail_v": 0.0103820,
+    "entry_latency_s": 7.0998e-6,
+    "wake_latency_s": 4.831253e-10,
+    "wake_peak_current_a": 0.0067214,
+    "entry_vdd_energy_j": 1.41957e-14,
+    "entry_control_abs_energy_j": 3.1318e-15,
+    "wake_vdd_energy_j": 1.4113e-12,
+    "wake_control_abs_energy_j": 1.9687e-15,
+    "transition_energy_status": "final_threshold_aligned"
+  },
+  "measured_zero_to_nonzero_state_sensitivity": {
+    "entry_latency_change_percent": -2.645,
+    "wake_latency_change_percent": 1.207,
+    "off_power_change_percent": -0.449,
+    "wake_peak_current_change_percent": -0.628,
+    "entry_total_energy_change_percent": -2.727,
+    "wake_total_energy_change_percent": 1.283,
+    "conclusion": "all measured state sensitivities are below 2.8 percent"
+  },
+  "header_sizing_sweep_1x1_zero_state": {
+    "sizing_basis": "ceil of per-PE average ACTIVE current divided by characterized unit-header current at the specified virtual-rail drop",
+    "points": [
+      {
+        "header_m": 44,
+        "active_drop_target_percent": 10.0,
+        "off_power_w": 2.0834e-9,
+        "off_virtual_rail_v": 0.0011904,
+        "entry_latency_s": 7.2251e-6,
+        "wake_latency_s": 7.923212e-10,
+        "wake_peak_current_a": 0.0038537,
+        "entry_vdd_energy_j": 7.7118e-15,
+        "entry_control_abs_energy_j": 1.7222e-15,
+        "wake_vdd_energy_j": 1.3304e-12,
+        "wake_control_abs_energy_j": 1.0118e-15
+      },
+      {
+        "header_m": 57,
+        "active_drop_target_percent": 7.5,
+        "off_power_w": 2.6976e-9,
+        "off_virtual_rail_v": 0.0015716,
+        "entry_latency_s": 7.2511e-6,
+        "wake_latency_s": 6.367148e-10,
+        "wake_peak_current_a": 0.0048381,
+        "entry_vdd_energy_j": 1.00268e-14,
+        "entry_control_abs_energy_j": 2.1698e-15,
+        "wake_vdd_energy_j": 1.3381e-12,
+        "wake_control_abs_energy_j": 1.3257e-15
+      },
+      {
+        "header_m": 83,
+        "active_drop_target_percent": 5.0,
+        "off_power_w": 3.8979e-9,
+        "off_virtual_rail_v": 0.0071290,
+        "entry_latency_s": 7.2927e-6,
+        "wake_latency_s": 4.773649e-10,
+        "wake_peak_current_a": 0.0067639,
+        "entry_vdd_energy_j": 1.46460e-14,
+        "entry_control_abs_energy_j": 3.1672e-15,
+        "wake_vdd_energy_j": 1.3934e-12,
+        "wake_control_abs_energy_j": 1.9677e-15
+      },
+      {
+        "header_m": 164,
+        "active_drop_target_percent": 2.5,
+        "off_power_w": 7.7311e-9,
+        "off_virtual_rail_v": 0.0044021,
+        "entry_latency_s": 7.4235e-6,
+        "wake_latency_s": 2.325666e-10,
+        "wake_peak_current_a": 0.0122629,
+        "entry_vdd_energy_j": 2.94275e-14,
+        "entry_control_abs_energy_j": 6.2102e-15,
+        "wake_vdd_energy_j": 1.2372e-12,
+        "wake_control_abs_energy_j": 4.0066e-15
+      }
+    ],
+    "selection_status": "requires_explicit_acceptable_active_droop_constraint; no unconstrained optimum is claimed"
+  },
+  "measurement_definitions": {
+    "entry_latency": "sleep control 50% rising to virtual rail falling through 10% VDD",
+    "wake_latency": "sleep control 50% falling to virtual rail rising through 90% VDD",
+    "transition_energy": "source energy integrated from control-transition start through the corresponding measured rail threshold",
+    "control_energy": "absolute energy at the ideal sleep-control voltage source"
+  },
+  "not_yet_characterized": [
+    "nonzero drained-state sensitivity",
+    "distributed-header and PDN effects",
+    "output-isolation area, power, and load",
+    "128x128 extrapolation",
+    "controller overhead",
+    "final break-even time"
+  ],
+  "limitations": [
+    "synthesis-stage interconnect and PDN parasitics are excluded",
+    "external output isolation and its load are excluded",
+    "the lumped RVT PMOS header is an equivalent switch-network assumption, not a dedicated foundry power-switch cell",
+    "rail-only wake excludes architectural reset and weight reload",
+    "these 1x1 results must not be reported as full-array parameters until connected-block scaling is validated"
+  ]
+}

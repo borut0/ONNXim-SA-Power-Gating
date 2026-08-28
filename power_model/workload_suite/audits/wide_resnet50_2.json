@@ -1,0 +1,27 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. Also reject grouped/depthwise Conv because the current weight-stationary ConvWS source marks that path unsupported and it fails runtime SRAM allocation validation. A pass still requires ONNXim initialization/completion and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "ReorderOutput": 1
+  },
+  "modeled_operator_counts": {
+    "Conv": 53,
+    "Flatten": 1,
+    "Gemm": 1,
+    "GlobalAveragePool": 1,
+    "MaxPool": 1
+  },
+  "name": "wide_resnet50_2",
+  "node_count": 58,
+  "operator_counts": {
+    "Conv": 53,
+    "Flatten": 1,
+    "Gemm": 1,
+    "GlobalAveragePool": 1,
+    "MaxPool": 1,
+    "ReorderOutput": 1
+  },
+  "path": "models/wide_resnet50_2/wide_resnet50_2.onnx",
+  "strict_operator_audit_pass": true,
+  "unmodeled_operator_counts": {},
+  "unsupported_grouped_convolution_count": 0
+}

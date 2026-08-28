@@ -32,6 +32,14 @@ using json = nlohmann::json;
 typedef uint64_t addr_type;
 typedef uint64_t cycle_type;
 
+enum class MemoryStage {
+  CORE_REQUEST_QUEUE,
+  ICNT_TO_MEMORY,
+  DRAM,
+  ICNT_TO_CORE,
+  DONE
+};
+
 typedef struct {
   uint32_t id;
   addr_type dram_address;
@@ -44,7 +52,50 @@ typedef struct {
   cycle_type dram_enter_cycle;
   cycle_type dram_finish_cycle;
   int buffer_id;
+  uint64_t core_queue_ticket = 0;
+
+  // -------- Profiler --------
+  MemoryStage stage = MemoryStage::CORE_REQUEST_QUEUE;
+  cycle_type stage_enter_cycle = 0;
+
+  cycle_type core_queue_cycles = 0;
+  cycle_type icnt_to_mem_cycles = 0;
+  cycle_type dram_cycles = 0;
+  cycle_type icnt_to_core_cycles = 0;
+  bool dram_completion_counted = false;
 } MemoryAccess;
+
+inline void transition_memory_stage(
+    MemoryAccess* access,
+    MemoryStage new_stage,
+    cycle_type current_cycle)
+{
+    cycle_type elapsed = current_cycle - access->stage_enter_cycle;
+
+    switch (access->stage) {
+    case MemoryStage::CORE_REQUEST_QUEUE:
+        access->core_queue_cycles += elapsed;
+        break;
+
+    case MemoryStage::ICNT_TO_MEMORY:
+        access->icnt_to_mem_cycles += elapsed;
+        break;
+
+    case MemoryStage::DRAM:
+        access->dram_cycles += elapsed;
+        break;
+
+    case MemoryStage::ICNT_TO_CORE:
+        access->icnt_to_core_cycles += elapsed;
+        break;
+
+    case MemoryStage::DONE:
+        break;
+    }
+
+    access->stage = new_stage;
+    access->stage_enter_cycle = current_cycle;
+}
 
 enum class Opcode {
   MOVIN,
@@ -91,6 +142,7 @@ typedef struct {
   bool src_from_accum = false;
   bool zero_init = false;
   bool last_inst = false;
+  uint64_t measurement_tile_id = 0;
   Tile* my_tile;
   std::string to_string();
 } Instruction;
@@ -123,6 +175,12 @@ struct Tile {
   int accum_spad_id;
   int core_id = -1;
   bool inst_finished = false;
+  uint64_t measurement_tile_id = 0;
+
+  //for analysis
+  cycle_type last_gemm_cycle = 0;
+  bool last_gemm_seen = false;
+  //end
 } ;
 
 uint32_t generate_id();

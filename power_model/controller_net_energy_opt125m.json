@@ -1,0 +1,64 @@
+{
+  "cores": {
+    "0": {
+      "workload_cycles": 1977911,
+      "sleep_episodes": 128,
+      "sleep_cycles": 64437,
+      "gross_sa_savings_j": 7.614169099370496e-08,
+      "controller_power_w": 0.0004367499787,
+      "controller_energy_j": 8.638525871204958e-07,
+      "net_savings_j": -7.877108961267908e-07
+    },
+    "1": {
+      "workload_cycles": 1977911,
+      "sleep_episodes": 141,
+      "sleep_cycles": 72289,
+      "gross_sa_savings_j": 8.747761604575231e-08,
+      "controller_power_w": 0.000436869741,
+      "controller_energy_j": 8.64089466291051e-07,
+      "net_savings_j": -7.766118502452987e-07
+    },
+    "2": {
+      "workload_cycles": 1977911,
+      "sleep_episodes": 125,
+      "sleep_cycles": 66770,
+      "gross_sa_savings_j": 8.302914454241281e-08,
+      "controller_power_w": 0.0004366564681,
+      "controller_energy_j": 8.636676314761391e-07,
+      "net_savings_j": -7.806384869337263e-07
+    },
+    "3": {
+      "workload_cycles": 1977911,
+      "sleep_episodes": 144,
+      "sleep_cycles": 70615,
+      "gross_sa_savings_j": 8.17614554860749e-08,
+      "controller_power_w": 0.0004368696536,
+      "controller_energy_j": 8.640892934216297e-07,
+      "net_savings_j": -7.823278379355549e-07
+    }
+  },
+  "aggregate": {
+    "workload_cycles": 7911644,
+    "sleep_episodes": 538,
+    "sleep_cycles": 274111,
+    "gross_sa_power_gating_savings_j": 3.2840990706794495e-07,
+    "controller_energy_j": 3.455698978309316e-06,
+    "net_savings_j": -3.127289071241371e-06,
+    "controller_fraction_of_gross_savings": 10.522517451321479
+  },
+  "method": {
+    "sleep_timing": "exact synthesized-controller RTL replay episodes",
+    "sa_event_energy": "Direct connected 1x1 SA HSPICE duration sweep, ASAP7 TT, 25 C, M300 equivalent RVT PMOS header",
+    "controller_power": "100%-annotated ASAP7 TT gate-level workload activity",
+    "controller_time": "full per-core trace at curve frequency",
+    "sa_scaling": "linear per-PE scaling; M300/PE droop validated directly at 1x1 and 4x4",
+    "limitations": [
+      "placed power-grid parasitics",
+      "isolation cells",
+      "clock-control logic",
+      "architectural reset/control energy",
+      "controller clock-tree and routed-interconnect power",
+      "delay-dependent controller glitch power"
+    ]
+  }
+}

@@ -152,6 +152,78 @@ bool Scheduler::is_accum_tile(uint32_t core_id, int index) {
   }
 }
 
+bool Scheduler::has_core_tile(uint32_t core_id) const {
+  auto queue = _core_executable_tile_queue.find(core_id);
+  return queue != _core_executable_tile_queue.end() && !queue->second.empty();
+}
+
+bool Scheduler::get_core_front_tile_info(
+    uint32_t core_id, bool& skip, bool& contains_gemm,
+    size_t& pre_gemm_instruction_count) const {
+  skip = false;
+  contains_gemm = false;
+  pre_gemm_instruction_count = 0;
+
+  auto queue = _core_executable_tile_queue.find(core_id);
+  if (queue == _core_executable_tile_queue.end() || queue->second.empty()) {
+    return false;
+  }
+
+  const Tile& tile = *queue->second.front();
+  skip = tile.skip;
+  for (const std::unique_ptr<Instruction>& inst : tile.instructions) {
+    if (inst->opcode == Opcode::GEMM ||
+        inst->opcode == Opcode::GEMM_PRELOAD) {
+      contains_gemm = true;
+      break;
+    }
+    pre_gemm_instruction_count++;
+  }
+  return true;
+}
+
+cycle_type Scheduler::get_core_queued_instruction_count(
+    uint32_t core_id) const {
+  auto queue = _core_executable_tile_queue.find(core_id);
+  if (queue == _core_executable_tile_queue.end()) {
+    return 0;
+  }
+
+  cycle_type instruction_count = 0;
+  for (const std::unique_ptr<Tile>& tile : queue->second) {
+    if (!tile->skip) {
+      instruction_count += tile->instructions.size();
+    }
+  }
+  return instruction_count;
+}
+
+uint64_t Scheduler::get_core_queued_memory_request_count(
+    uint32_t core_id) const {
+  auto queue = _core_executable_tile_queue.find(core_id);
+  if (queue == _core_executable_tile_queue.end()) {
+    return 0;
+  }
+
+  uint64_t request_count = 0;
+  for (const std::unique_ptr<Tile>& tile : queue->second) {
+    if (tile->skip) {
+      continue;
+    }
+    for (const std::unique_ptr<Instruction>& inst : tile->instructions) {
+      if (inst->opcode == Opcode::MOVIN) {
+        request_count += inst->src_addrs.size();
+      }
+    }
+  }
+  return request_count;
+}
+
+bool Scheduler::simple_global_tile_queue_empty() const {
+  auto queue = _executable_tile_queue.find(0);
+  return queue == _executable_tile_queue.end() || queue->second.empty();
+}
+
 bool Scheduler::tile_queue_empty() {
   bool all_empty = true;
   for (int i = 0; i < _config.num_cores; i++) {

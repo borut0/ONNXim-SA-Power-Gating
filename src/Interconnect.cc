@@ -1,14 +1,76 @@
 #include "Interconnect.h"
 #include "booksim2/Interconnect.hpp"
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
+#include <string>
 
 namespace fs = std::filesystem;
+
+namespace {
+
+bool component_characterization_enabled() {
+  const char* value = std::getenv("ONNXSIM_COMPONENT_CHARACTERIZATION");
+  return value != nullptr && value[0] != '\0' &&
+         std::string(value) != "0";
+}
+
+}  // namespace
+
+void Interconnect::record_packet_injected() {
+  if (!_component_characterization) {
+    return;
+  }
+  _outstanding_packets++;
+  _injected_packets++;
+  _peak_outstanding_packets =
+      std::max(_peak_outstanding_packets, _outstanding_packets);
+}
+
+void Interconnect::record_packet_delivered() {
+  if (!_component_characterization) {
+    return;
+  }
+  assert(_outstanding_packets > 0);
+  _outstanding_packets--;
+  _delivered_packets++;
+}
+
+void Interconnect::record_activity_cycle() {
+  if (_component_characterization && _outstanding_packets != 0) {
+    _demand_active_cycles++;
+  }
+}
+
+void Interconnect::print_component_characterization() const {
+  const uint64_t idle_cycles = _cycles - _demand_active_cycles;
+  const double active_percent =
+      _cycles == 0
+          ? 0.0
+          : 100.0 * static_cast<double>(_demand_active_cycles) /
+                static_cast<double>(_cycles);
+  json record{{"version", 1},
+              {"icnt_cycles", _cycles},
+              {"demand_active_cycles", _demand_active_cycles},
+              {"demand_idle_cycles", idle_cycles},
+              {"demand_active_percent", active_percent},
+              {"demand_idle_percent", 100.0 - active_percent},
+              {"injected_packets", _injected_packets},
+              {"delivered_packets", _delivered_packets},
+              {"peak_outstanding_packets", _peak_outstanding_packets},
+              {"outstanding_packets_at_end", _outstanding_packets},
+              {"activity_semantics",
+               "at least one ONNXim memory packet is in flight from "
+               "injection through destination delivery"}};
+  spdlog::info("COMPONENT_NOC {}", record.dump());
+}
 
 SimpleInterconnect::SimpleInterconnect(SimulationConfig config)
   :  _latency(config.icnt_latency) {
   spdlog::info("Initialize SimpleInterconnect");
   _cycles = 0;
+  _component_characterization = component_characterization_enabled();
   _config = config;
   _n_nodes = config.num_cores * _config.icnt_injection_ports_per_core + config.dram_channels;
   _in_buffers.resize(_n_nodes);
@@ -28,6 +90,7 @@ bool SimpleInterconnect::running() {
 }
 
 void SimpleInterconnect::cycle() {
+  record_activity_cycle();
   for(int dest = 0; dest < _n_nodes; dest++) {
     int src_start = _rr_next_src[dest];
     bool pushed = false;
@@ -58,6 +121,7 @@ void SimpleInterconnect::push(uint32_t src, uint32_t dest, MemoryAccess* request
   entity.dest = dest;
   entity.access = request;
   _in_buffers[src][dest].push(entity);
+  record_packet_injected();
 }
 
 bool SimpleInterconnect::is_full(uint32_t nid, MemoryAccess* request) {
@@ -76,11 +140,14 @@ MemoryAccess* SimpleInterconnect::top(uint32_t nid) {
 
 void SimpleInterconnect::pop(uint32_t nid) {
   _out_buffers[nid].pop();
+  record_packet_delivered();
   // spdlog::trace("PUSH {}", _cycles);
 }
 
 
 Booksim2Interconnect::Booksim2Interconnect(SimulationConfig config) {
+  _cycles = 0;
+  _component_characterization = component_characterization_enabled();
   _config = config;
   _n_nodes = config.num_cores * _config.icnt_injection_ports_per_core + config.dram_channels;
   spdlog::info("Initialize Booksim2"); 
@@ -99,13 +166,16 @@ bool Booksim2Interconnect::running() {
 }
 
 void Booksim2Interconnect::cycle() {
+  record_activity_cycle();
   _booksim->run();
+  _cycles++;
 }
 
 void Booksim2Interconnect::push(uint32_t src, uint32_t dest, MemoryAccess* request) {
   booksim2::Interconnect::Type type = get_booksim_type(request);
   uint32_t size = get_packet_size(request);
   _booksim->push(request, 0, 0, size, type, src, dest);
+  record_packet_injected();
 }
 
 bool Booksim2Interconnect::is_full(uint32_t nid, MemoryAccess* request) {
@@ -125,6 +195,7 @@ MemoryAccess* Booksim2Interconnect::top(uint32_t nid) {
 void Booksim2Interconnect::pop(uint32_t nid) {
   assert(!is_empty(nid));
   _booksim->pop(nid, 0);
+  record_packet_delivered();
 }
 
 void Booksim2Interconnect::print_stats() {

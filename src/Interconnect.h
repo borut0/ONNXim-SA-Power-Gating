@@ -15,11 +15,23 @@ class Interconnect {
   virtual MemoryAccess* top(uint32_t nid) = 0;
   virtual void pop(uint32_t nid) = 0;
   virtual void print_stats() = 0;
+  virtual void print_component_characterization() const;
+  bool has_in_flight_traffic() const { return _outstanding_packets != 0; }
 
  protected:
   SimulationConfig _config;
   uint32_t _n_nodes;
   uint64_t _cycles;
+  uint64_t _outstanding_packets = 0;
+  uint64_t _injected_packets = 0;
+  uint64_t _delivered_packets = 0;
+  uint64_t _demand_active_cycles = 0;
+  uint64_t _peak_outstanding_packets = 0;
+  bool _component_characterization = false;
+
+  void record_packet_injected();
+  void record_packet_delivered();
+  void record_activity_cycle();
 };
 
 // Simple without conflict interconnect

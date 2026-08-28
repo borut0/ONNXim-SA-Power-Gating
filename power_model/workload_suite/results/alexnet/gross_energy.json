@@ -1,0 +1,18 @@
+{
+  "core_count": 4,
+  "total_core_cycles": 3626572,
+  "sleep_cycles": 426968,
+  "sleep_percent_total": 11.773322024214602,
+  "sleep_episodes": 1660,
+  "average_episode_cycles": 257.2096385542169,
+  "minimum_episode_cycles": 6,
+  "maximum_episode_cycles": 2384,
+  "positive_gross_energy_episodes": 1635,
+  "nonpositive_gross_energy_episodes": 25,
+  "episodes_below_measured_curve": 0,
+  "gross_sa_savings_j": 2.754108850880531e-07,
+  "gross_percent_total_on_static_reference": 1.3174610695072473,
+  "controller_energy_included": false,
+  "net_energy_known": false,
+  "method": "Exact synthesized-controller sleep episodes evaluated with the direct HSPICE duration-energy curve; below-minimum episodes are conservatively charged the full shortest measured event."
+}

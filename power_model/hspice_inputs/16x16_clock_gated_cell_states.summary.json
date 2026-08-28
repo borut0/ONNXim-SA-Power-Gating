@@ -1,0 +1,11 @@
+{
+  "label": "16x16_clock_gated_idle",
+  "mapped_instances": 533954,
+  "observed_instances": 533954,
+  "unique_cell_types": 49,
+  "unique_cell_states": 320,
+  "missing_pin_instances": 0,
+  "unknown_instances": 0,
+  "final_scalar_identifiers": 2367515,
+  "output": "/home/fenil/ONNXim/power_model/hspice_inputs/16x16_clock_gated_cell_states.csv"
+}

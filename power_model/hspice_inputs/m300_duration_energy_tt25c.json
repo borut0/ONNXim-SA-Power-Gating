@@ -1,0 +1,38 @@
+{
+  "description": "Direct connected 1x1 SA HSPICE duration sweep, ASAP7 TT, 25 C, M300 equivalent RVT PMOS header",
+  "directly_measured": true,
+  "voltage_v": 0.7,
+  "frequency_ghz_for_cycle_mapping": 1.0,
+  "on_reference_power_w_per_pe": 3.518253e-7,
+  "steady_off_power_w_per_pe": 1.40768e-8,
+  "event_recovery_window_ns": 5.1,
+  "break_even_bracket_ns": [150, 175],
+  "interpolated_break_even_ns": 165.3,
+  "points": [
+    {"sleep_plateau_ns": 5, "event_vdd_energy_fj": 3.4506, "event_control_energy_fj": 13.9238},
+    {"sleep_plateau_ns": 10, "event_vdd_energy_fj": 4.8613, "event_control_energy_fj": 13.9266},
+    {"sleep_plateau_ns": 50, "event_vdd_energy_fj": 15.5239, "event_control_energy_fj": 13.9441},
+    {"sleep_plateau_ns": 100, "event_vdd_energy_fj": 28.7846, "event_control_energy_fj": 13.6054},
+    {"sleep_plateau_ns": 150, "event_vdd_energy_fj": 42.2864, "event_control_energy_fj": 13.9859},
+    {"sleep_plateau_ns": 175, "event_vdd_energy_fj": 48.2865, "event_control_energy_fj": 13.9975},
+    {"sleep_plateau_ns": 200, "event_vdd_energy_fj": 55.1636, "event_control_energy_fj": 14.0084},
+    {"sleep_plateau_ns": 250, "event_vdd_energy_fj": 67.7067, "event_control_energy_fj": 14.0306},
+    {"sleep_plateau_ns": 500, "event_vdd_energy_fj": 131.1477, "event_control_energy_fj": 14.2638},
+    {"sleep_plateau_ns": 1000, "event_vdd_energy_fj": 249.8182, "event_control_energy_fj": 14.5916},
+    {"sleep_plateau_ns": 2000, "event_vdd_energy_fj": 466.4413, "event_control_energy_fj": 15.0827},
+    {"sleep_plateau_ns": 3000, "event_vdd_energy_fj": 656.5723, "event_control_energy_fj": 15.6512},
+    {"sleep_plateau_ns": 5000, "event_vdd_energy_fj": 1016.6, "event_control_energy_fj": 17.0149},
+    {"sleep_plateau_ns": 8000, "event_vdd_energy_fj": 1566.0, "event_control_energy_fj": 19.1709},
+    {"sleep_plateau_ns": 15000, "event_vdd_energy_fj": 2395.7, "event_control_energy_fj": 19.6069}
+  ],
+  "extrapolation": {
+    "target_pe_count": 16384,
+    "basis": "linear per-PE scaling; M300/PE droop validated directly at 1x1 and 4x4",
+    "not_included": [
+      "placed power-grid parasitics",
+      "isolation cells",
+      "clock-control logic",
+      "architectural reset/control energy"
+    ]
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. Also reject grouped/depthwise Conv because the current weight-stationary ConvWS source marks that path unsupported and it fails runtime SRAM allocation validation. A pass still requires ONNXim initialization/completion and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "Cast": 12,
+    "ReorderOutput": 1
+  },
+  "modeled_operator_counts": {
+    "Conv": 1,
+    "Gemm": 13,
+    "MatMul": 60
+  },
+  "name": "vit_b_16",
+  "node_count": 976,
+  "operator_counts": {
+    "Add": 61,
+    "Cast": 12,
+    "Concat": 99,
+    "Conv": 1,
+    "Div": 26,
+    "Equal": 1,
+    "Expand": 1,
+    "Gather": 114,
+    "Gelu": 12,
+    "Gemm": 13,
+    "LayerNormalization": 25,
+    "MatMul": 60,
+    "Mul": 49,
+    "ReorderOutput": 1,
+    "Reshape": 110,
+    "Shape": 62,
+    "Slice": 48,
+    "Softmax": 12,
+    "Sqrt": 24,
+    "Squeeze": 24,
+    "Transpose": 97,
+    "Unsqueeze": 123,
+    "Where": 1
+  },
+  "path": "models/vit_b_16/vit_b_16.onnx",
+  "strict_operator_audit_pass": false,
+  "unmodeled_operator_counts": {
+    "Add": 61,
+    "Concat": 99,
+    "Div": 26,
+    "Equal": 1,
+    "Expand": 1,
+    "Gather": 114,
+    "Gelu": 12,
+    "LayerNormalization": 25,
+    "Mul": 49,
+    "Reshape": 110,
+    "Shape": 62,
+    "Slice": 48,
+    "Softmax": 12,
+    "Sqrt": 24,
+    "Squeeze": 24,
+    "Transpose": 97,
+    "Unsqueeze": 123,
+    "Where": 1
+  },
+  "unsupported_grouped_convolution_count": 0
+}

@@ -1,0 +1,9 @@
+{
+    "models": [
+        {
+            "name": "resnet34",
+            "batch_size": 1,
+            "request_time": 0
+        }
+    ]
+}

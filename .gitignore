@@ -1,3 +1,30 @@
 models/*
 model_lists/*
 build/*
+
+# Local editor and Python cache files.
+.vscode/
+__pycache__/
+*.py[cod]
+
+# Large/generated research artifacts. Keep scripts, RTL, compact JSON
+# summaries, and methodology documents under version control instead.
+*.vcd
+*.vcd.gz
+*.fst
+*.fsdb
+*.lis
+*.sp
+*.raw
+*.log
+*.log.*
+power_model/1_2_yosys.v
+power_model/activity/
+power_model/controller_traces/
+power_model/gate_activity/
+power_model/asap7_cells/
+power_model/hspice_inputs/asap7_tt_libs/
+power_model/hspice_inputs/*.csv
+power_model/controller_power_reports/
+power_model/power_reports/
+power_model/reports/

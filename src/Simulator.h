@@ -68,6 +68,12 @@ class Simulator {
   uint64_t _nr_to_mem=0;
   cycle_type _icnt_cycle=0;
   uint64_t _icnt_interval=0;
+  uint64_t _total_nr_from_core=0;
+  uint64_t _total_nr_to_core=0;
+  uint64_t _total_nr_from_mem=0;
+  uint64_t _total_nr_to_mem=0;
+  bool _component_characterization=false;
+  bool _scheduler_unlock_measure=false;
 
   struct CompareModel {
     bool operator()(const std::unique_ptr<Model>& a, const std::unique_ptr<Model>& b) const {

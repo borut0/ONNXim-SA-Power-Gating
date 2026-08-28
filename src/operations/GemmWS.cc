@@ -236,16 +236,17 @@ void GemmWS::initialize_instructions(Tile* tile, Mapping mapping) {
             (Ns * mapping.tile_in_loop.M + Ms) * _config.precision;
         for(int c_iter = 0; c_iter < c_in_loop; c_iter+=_config.core_config[target_core].core_height) {
           int c_iter_size = c_in_loop - c_iter > _config.core_config[target_core].core_height ? _config.core_config[target_core].core_height : c_in_loop - c_iter;
-          tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-              .opcode = Opcode::GEMM_PRELOAD,
-              .dest_addr = out_sp_addr,
-              .size = (uint32_t)n_loop,
-              .compute_size = (uint32_t)n_loop,
-              .src_addrs =
-                  std::vector<addr_type>{act_sp_addr, weight_sp_addr},
-              .tile_m = static_cast<unsigned int>(m_loop),
-              .tile_k = static_cast<unsigned int>(c_iter_size),
-              .tile_n = static_cast<unsigned int>(n_loop)}));
+          auto inst = std::make_unique<Instruction>(Instruction{
+            .opcode = Opcode::GEMM_PRELOAD,
+            .dest_addr = out_sp_addr,
+            .size = (uint32_t)n_loop,
+            .compute_size = (uint32_t)n_loop,
+            .src_addrs = std::vector<addr_type>{act_sp_addr, weight_sp_addr},
+            .tile_m = static_cast<unsigned int>(m_loop),
+            .tile_k = static_cast<unsigned int>(c_iter_size),
+            .tile_n = static_cast<unsigned int>(n_loop)
+          });
+        tile->instructions.push_back(std::move(inst));
         }
       }
     }
@@ -282,12 +283,14 @@ void GemmWS::initialize_instructions(Tile* tile, Mapping mapping) {
           }
         }
           /*MOVOUT result at the last loop*/
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
+          auto movout_inst = std::make_unique<Instruction>(Instruction{
             .opcode = Opcode::MOVOUT,
             .dest_addr = out_sp_addr,
             .size = (uint32_t)output_set.size(),
             .src_addrs = std::vector<addr_type>(output_set.begin(), output_set.end()),
-            .operand_id = _OUTPUT_OPERAND}));
+            .operand_id = _OUTPUT_OPERAND
+          });
+          tile->instructions.push_back(std::move(movout_inst));
       }
     }
   }

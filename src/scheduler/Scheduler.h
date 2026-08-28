@@ -18,6 +18,15 @@ class Scheduler {
     virtual void issue_tile_per_core();
     virtual void issue_tile_per_core(std::vector<uint32_t>& allowed_cpu, int offset, uint32_t partition_id);
     virtual bool is_accum_tile(uint32_t core_id, int index);
+    virtual bool has_core_tile(uint32_t core_id) const;
+    virtual bool get_core_front_tile_info(
+        uint32_t core_id, bool& skip, bool& contains_gemm,
+        size_t& pre_gemm_instruction_count) const;
+    virtual cycle_type get_core_queued_instruction_count(
+        uint32_t core_id) const;
+    virtual uint64_t get_core_queued_memory_request_count(
+        uint32_t core_id) const;
+    virtual bool simple_global_tile_queue_empty() const;
     virtual void finish_tile(uint32_t core_id, int layer_id);
     virtual bool empty();
     virtual bool tile_queue_empty();

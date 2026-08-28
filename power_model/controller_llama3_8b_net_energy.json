@@ -1,0 +1,65 @@
+{
+  "cores": {
+    "0": {
+      "workload_cycles": 52263612,
+      "sleep_episodes": 1569,
+      "sleep_cycles": 1000040,
+      "gross_sa_savings_j": 1.3657129207442637e-06,
+      "controller_power_w": 2.625194975e-05,
+      "controller_energy_j": 1.372021715977497e-06,
+      "net_savings_j": -6.308795233233359e-09
+    },
+    "1": {
+      "workload_cycles": 52263612,
+      "sleep_episodes": 1755,
+      "sleep_cycles": 1131983,
+      "gross_sa_savings_j": 1.5598045690421249e-06,
+      "controller_power_w": 2.818642133e-05,
+      "controller_energy_j": 1.473124188059644e-06,
+      "net_savings_j": 8.668038098248086e-08
+    },
+    "2": {
+      "workload_cycles": 52263612,
+      "sleep_episodes": 1576,
+      "sleep_cycles": 1005852,
+      "gross_sa_savings_j": 1.377568885689221e-06,
+      "controller_power_w": 2.63742113e-05,
+      "controller_energy_j": 1.3784115461892157e-06,
+      "net_savings_j": -8.426604999946686e-10
+    },
+    "3": {
+      "workload_cycles": 52263612,
+      "sleep_episodes": 1772,
+      "sleep_cycles": 1128526,
+      "gross_sa_savings_j": 1.5435406748149351e-06,
+      "controller_power_w": 2.819500514e-05,
+      "controller_energy_j": 1.4735728089749656e-06,
+      "net_savings_j": 6.996786583996951e-08
+    }
+  },
+  "aggregate": {
+    "workload_cycles": 209054448,
+    "sleep_episodes": 6672,
+    "sleep_cycles": 4266401,
+    "gross_sa_power_gating_savings_j": 5.846627050290545e-06,
+    "controller_energy_j": 5.697130259201323e-06,
+    "net_savings_j": 1.4949679108922212e-07,
+    "controller_fraction_of_gross_savings": 0.9744302501590566
+  },
+  "method": {
+    "sleep_timing": "exact synthesized-controller RTL replay episodes",
+    "sa_event_energy": "Direct connected 1x1 SA HSPICE duration sweep, ASAP7 TT, 25 C, M300 equivalent RVT PMOS header",
+    "controller_power": "100%-annotated ASAP7 TT gate-level workload activity",
+    "controller_power_report_stem": "controller_clock_gated_llama3_8b",
+    "controller_time": "full per-core trace at curve frequency",
+    "sa_scaling": "linear per-PE scaling; M300/PE droop validated directly at 1x1 and 4x4",
+    "limitations": [
+      "placed power-grid parasitics",
+      "isolation cells",
+      "clock-control logic",
+      "architectural reset/control energy",
+      "controller clock-tree and routed-interconnect power",
+      "delay-dependent controller glitch power"
+    ]
+  }
+}

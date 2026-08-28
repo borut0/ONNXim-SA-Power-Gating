@@ -93,13 +93,19 @@ int main(int argc, char** argv) {
       std::string model_path =
         fmt::format("{}/{}/{}.json", model_base_path, "language_models", model_name);
       std::ifstream model_file(model_path);
-      if (!models_list_file) {
+      if (!model_file) {
         spdlog::error("Error opening file: {}", model_path);
         exit(EXIT_FAILURE);
       }
-      std::string input_trace = "input.csv";
+      std::string input_trace;
       cmd_parser.set_if_defined("trace_file", &input_trace);
-      model_config["trace_file"] = input_trace;
+      if (!input_trace.empty()) {
+        model_config["trace_file"] = input_trace;
+      } else if (!model_config.contains("trace_file")) {
+        model_config["trace_file"] = "input.csv";
+      }
+      spdlog::info("Language input trace: {}",
+                   model_config["trace_file"].get<std::string>());
 
       json model_json = json::parse(model_file);
       auto model = std::make_unique<LanguageModel>(model_json, config, model_name);

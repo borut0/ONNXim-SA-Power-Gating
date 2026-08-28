@@ -1,0 +1,6 @@
+time,prompt_length,target_length,cached_length
+0,32,8,0
+100000,32,8,0
+100000,32,8,0
+100000,32,8,0
+100000,32,8,0

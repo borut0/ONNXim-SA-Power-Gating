@@ -1,0 +1,26 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. A pass still requires ONNXim initialization/completion validation and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "ReorderOutput": 1
+  },
+  "modeled_operator_counts": {
+    "Conv": 53,
+    "Flatten": 1,
+    "Gemm": 1,
+    "GlobalAveragePool": 1,
+    "MaxPool": 1
+  },
+  "name": "resnet50",
+  "node_count": 58,
+  "operator_counts": {
+    "Conv": 53,
+    "Flatten": 1,
+    "Gemm": 1,
+    "GlobalAveragePool": 1,
+    "MaxPool": 1,
+    "ReorderOutput": 1
+  },
+  "path": "models/resnet50/resnet50.onnx",
+  "strict_operator_audit_pass": true,
+  "unmodeled_operator_counts": {}
+}

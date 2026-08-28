@@ -1,0 +1,121 @@
+OpenROAD 26Q3-771-g7cfb2105c9 
+Features included (+) or not (-): +GPU +GUI +Python
+This program is licensed under the BSD-3 license. See the LICENSE file for details.
+Components of this program may be licensed under more restrictive licenses which must be honored.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9184, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9217, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9250, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9283, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9316, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9349, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 9382, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 10518, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 10551, timing group from output port.
+[WARNING STA-1212] /OpenROAD-flow-scripts/flow/platforms/asap7/lib/NLDM/asap7sc7p5t_SIMPLE_RVT_FF_nldm_250407.lib.gz line 10584, timing group from output port.
+[WARNING ORD-2056] The following 9 liberty cell(s) do not have LEF masters and will be marked as dont-use:
+  DFFHQNH2V2Xx1_ASAP7_75t_R
+  DFFHQNH2V2Xx2_ASAP7_75t_R
+  DFFHQNH2V2Xx3_ASAP7_75t_R
+  DFFHQNV2Xx1_ASAP7_75t_R
+  DFFHQNV2Xx2_ASAP7_75t_R
+  DFFHQNV2Xx3_ASAP7_75t_R
+  DFFHQNV4Xx1_ASAP7_75t_R
+  DFFHQNV4Xx2_ASAP7_75t_R
+  DFFHQNV4Xx3_ASAP7_75t_R
+CONTROLLER_CLOCK_GATED_SYNTH_REPORT_BEGIN
+mapped_icg_count 2
+mapped_clock_buffer_count 2
+ time 1ps
+ capacitance 1fF
+ resistance 1kohm
+ voltage 1v
+ current 1mA
+ power 1pW
+ distance 1um
+Design area 435 um^2 100% utilization.
+worst slack max 224.88
+core_clock period_min = 760.46 fmax = 1314.99
+Startpoint: rst_n (input port clocked by core_clock)
+Endpoint: controller.certificate_stage1_valid$_DFF_PN0_
+          (recovery check against rising-edge clock core_clock)
+Path Group: asynchronous
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock core_clock (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+ 200.0000  200.0000 ^ input external delay
+   0.0000  200.0000 ^ rst_n (in)
+   0.0000  200.0000 ^ controller.certificate_stage1_valid$_DFF_PN0_/RESETN (DFFASRHQNx1_ASAP7_75t_R)
+           200.0000   data arrival time
+
+1000.0000 1000.0000   clock core_clock (rise edge)
+   0.0000 1000.0000   clock network delay (ideal)
+   0.0000 1000.0000   clock reconvergence pessimism
+          1000.0000 ^ controller.certificate_stage1_valid$_DFF_PN0_/CLK (DFFASRHQNx1_ASAP7_75t_R)
+   7.1940 1007.1939   library recovery time
+          1007.1939   data required time
+-------------------------------------------------------------
+          1007.1939   data required time
+          -200.0000   data arrival time
+-------------------------------------------------------------
+           807.1938   slack (MET)
+
+
+Startpoint: ex_front_is_sa (input port clocked by core_clock)
+Endpoint: controller.certificate_stage2_visible_remaining[10]$_DFFE_PN0P_
+          (rising edge-triggered flip-flop clocked by core_clock)
+Path Group: core_clock
+Path Type: max
+
+    Delay      Time   Description
+-------------------------------------------------------------
+   0.0000    0.0000   clock core_clock (rise edge)
+   0.0000    0.0000   clock network delay (ideal)
+ 200.0000  200.0000 ^ input external delay
+   0.0000  200.0000 ^ ex_front_is_sa (in)
+  12.5594  212.5594 v _3948_/Y (INVx1_ASAP7_75t_R)
+  27.3773  239.9367 v _3965_/Y (AND2x2_ASAP7_75t_R)
+  29.6719  269.6086 v _4292_/Y (BUFx2_ASAP7_75t_R)
+  17.6930  287.3017 ^ _4514_/Y (NAND2x1_ASAP7_75t_R)
+  29.3115  316.6132 v _6671_/SN (HAxp5_ASAP7_75t_R)
+  18.4404  335.0536 v _3938_/Y (OA21x2_ASAP7_75t_R)
+  15.8901  350.9437 v _3939_/Y (OA21x2_ASAP7_75t_R)
+  15.8649  366.8087 v _3940_/Y (OA21x2_ASAP7_75t_R)
+  24.5183  391.3269 v _3941_/Y (OR4x1_ASAP7_75t_R)
+  25.1212  416.4481 v _3942_/Y (OA211x2_ASAP7_75t_R)
+  19.0430  435.4911 v _3946_/Y (OA21x2_ASAP7_75t_R)
+   6.4283  441.9194 ^ _3947_/Y (OAI21x1_ASAP7_75t_R)
+  22.6225  464.5418 ^ _3994_/Y (BUFx2_ASAP7_75t_R)
+  24.7673  489.3091 ^ _4123_/Y (BUFx2_ASAP7_75t_R)
+  19.9212  509.2303 ^ _4515_/Y (AND3x1_ASAP7_75t_R)
+  12.5883  521.8186 ^ _4516_/Y (AO21x1_ASAP7_75t_R)
+  27.1401  548.9587 v _6446_/SN (HAxp5_ASAP7_75t_R)
+  19.7272  568.6859 v _5707_/Y (OA21x2_ASAP7_75t_R)
+  15.8962  584.5820 v _5708_/Y (OA21x2_ASAP7_75t_R)
+  15.8636  600.4457 v _5709_/Y (OA21x2_ASAP7_75t_R)
+  24.5543  625.0000 v _5710_/Y (OR4x1_ASAP7_75t_R)
+  29.3887  654.3887 v _5711_/Y (OA211x2_ASAP7_75t_R)
+  13.0582  667.4469 ^ _5712_/Y (OAI21x1_ASAP7_75t_R)
+  31.2951  698.7420 v _5713_/Y (NAND2x1_ASAP7_75t_R)
+  36.7535  735.4955 v _5729_/Y (BUFx2_ASAP7_75t_R)
+  11.5765  747.0721 ^ _5756_/Y (AOI21x1_ASAP7_75t_R)
+  13.3214  760.3935 ^ _5759_/Y (AO21x1_ASAP7_75t_R)
+   0.0000  760.3935 ^ controller.certificate_stage2_visible_remaining[10]$_DFFE_PN0P_/D (DFFASRHQNx1_ASAP7_75t_R)
+           760.3935   data arrival time
+
+1000.0000 1000.0000   clock core_clock (rise edge)
+   0.0000 1000.0000   clock network delay (ideal)
+   0.0000 1000.0000   clock reconvergence pessimism
+          1000.0000 ^ controller.certificate_stage2_visible_remaining[10]$_DFFE_PN0P_/CLK (DFFASRHQNx1_ASAP7_75t_R)
+ -14.7246  985.2753   library setup time
+           985.2753   data required time
+-------------------------------------------------------------
+           985.2753   data required time
+          -760.3935   data arrival time
+-------------------------------------------------------------
+           224.8818   slack (MET)
+
+
+CONTROLLER_CLOCK_GATED_SYNTH_REPORT_END

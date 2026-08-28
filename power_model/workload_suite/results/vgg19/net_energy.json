@@ -1,0 +1,72 @@
+{
+  "cores": {
+    "0": {
+      "workload_cycles": 2078951,
+      "sleep_episodes": 2158,
+      "sleep_cycles": 433178,
+      "gross_sa_savings_j": 1.381938497657241e-07,
+      "controller_power_w": 4.063469169e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 8.447753292361719e-08,
+      "net_savings_j": 5.3716316842106906e-08
+    },
+    "1": {
+      "workload_cycles": 2078951,
+      "sleep_episodes": 1397,
+      "sleep_cycles": 323503,
+      "gross_sa_savings_j": 1.5959300091265028e-07,
+      "controller_power_w": 4.114797775e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 8.554462949134025e-08,
+      "net_savings_j": 7.404837142131003e-08
+    },
+    "2": {
+      "workload_cycles": 2078951,
+      "sleep_episodes": 1380,
+      "sleep_cycles": 288428,
+      "gross_sa_savings_j": 1.0637849591480311e-07,
+      "controller_power_w": 4.125026317e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 8.575727586753467e-08,
+      "net_savings_j": 2.0621220047268436e-08
+    },
+    "3": {
+      "workload_cycles": 2078951,
+      "sleep_episodes": 2193,
+      "sleep_cycles": 438451,
+      "gross_sa_savings_j": 1.351142446791065e-07,
+      "controller_power_w": 4.187854211e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 8.70634369981266e-08,
+      "net_savings_j": 4.8050807680979906e-08
+    }
+  },
+  "aggregate": {
+    "workload_cycles": 8315804,
+    "sleep_episodes": 7128,
+    "sleep_cycles": 1483560,
+    "gross_sa_power_gating_savings_j": 5.39279591272284e-07,
+    "controller_energy_j": 3.428428752806187e-07,
+    "net_savings_j": 1.9643671599166528e-07,
+    "controller_fraction_of_gross_savings": 0.635742351146228,
+    "episodes_below_measured_curve": 1
+  },
+  "method": {
+    "sleep_timing": "exact synthesized-controller RTL replay episodes",
+    "sa_event_energy": "Direct connected 1x1 SA HSPICE duration sweep, ASAP7 TT, 25 C, M300 equivalent RVT PMOS header",
+    "controller_power": "100%-annotated ASAP7 TT gate-level workload activity",
+    "controller_power_report_stem": "controller_clock_gated_sparse_event_vgg19",
+    "controller_time": "full per-core trace at curve frequency",
+    "short_episode_policy": "clamp-min",
+    "short_episode_policy_detail": "below-minimum episodes charged the full shortest measured event energy",
+    "sa_scaling": "linear per-PE scaling; M300/PE droop validated directly at 1x1 and 4x4",
+    "limitations": [
+      "placed power-grid parasitics",
+      "isolation cells",
+      "clock-control logic",
+      "architectural reset/control energy",
+      "controller clock-tree and routed-interconnect power",
+      "delay-dependent controller glitch power"
+    ]
+  }
+}

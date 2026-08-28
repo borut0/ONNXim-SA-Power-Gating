@@ -1,0 +1,17 @@
+{
+  "label": "16x16_clock_gated_idle",
+  "liberty_files": 5,
+  "liberty_cell_types": 202,
+  "mapped_instances": 533954,
+  "observed_instances": 533954,
+  "aggregate_state_load_groups": 19286,
+  "missing_pin_instances": 0,
+  "unknown_instances": 0,
+  "missing_liberty_cell_types": {},
+  "missing_input_capacitances": {},
+  "multi_driver_nets": 0,
+  "total_sink_pin_capacitance_ff": 1004051.1219654966,
+  "total_attached_output_load_ff": 963134.4992390805,
+  "primary_input_or_undriven_load_ff": 40916.6227264161,
+  "output": "/home/fenil/ONNXim/power_model/hspice_inputs/16x16_clock_gated_state_loads.csv"
+}

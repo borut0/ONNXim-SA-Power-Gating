@@ -1,0 +1,28 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. A pass still requires ONNXim initialization/completion validation and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "ReorderOutput": 1
+  },
+  "modeled_operator_counts": {
+    "AveragePool": 1,
+    "Conv": 13,
+    "Flatten": 1,
+    "FusedGemm": 2,
+    "Gemm": 1,
+    "MaxPool": 5
+  },
+  "name": "vgg16",
+  "node_count": 24,
+  "operator_counts": {
+    "AveragePool": 1,
+    "Conv": 13,
+    "Flatten": 1,
+    "FusedGemm": 2,
+    "Gemm": 1,
+    "MaxPool": 5,
+    "ReorderOutput": 1
+  },
+  "path": "models/vgg16/vgg16.onnx",
+  "strict_operator_audit_pass": true,
+  "unmodeled_operator_counts": {}
+}

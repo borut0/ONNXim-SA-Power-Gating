@@ -1,0 +1,27 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. Also reject grouped/depthwise Conv because the current weight-stationary ConvWS source marks that path unsupported and it fails runtime SRAM allocation validation. A pass still requires ONNXim initialization/completion and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {
+    "Cast": 1
+  },
+  "modeled_operator_counts": {
+    "Attention": 12,
+    "EmbedLayerNormalization": 1,
+    "FastGelu": 12,
+    "MatMul": 37,
+    "SkipLayerNormalization": 24
+  },
+  "name": "gpt2",
+  "node_count": 87,
+  "operator_counts": {
+    "Attention": 12,
+    "Cast": 1,
+    "EmbedLayerNormalization": 1,
+    "FastGelu": 12,
+    "MatMul": 37,
+    "SkipLayerNormalization": 24
+  },
+  "path": "models/gpt2/gpt2.onnx",
+  "strict_operator_audit_pass": true,
+  "unmodeled_operator_counts": {},
+  "unsupported_grouped_convolution_count": 0
+}

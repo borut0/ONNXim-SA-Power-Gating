@@ -1,0 +1,15 @@
+{
+  "activation_function": "relu",
+  "num_attention_heads": 32,
+  "num_kv_heads": 32,
+  "vocab_size": 50272,
+  "num_hidden_layers": 24,
+  "hidden_size": 2048,
+  "intermediate_size": 8192,
+  "ffn_type": "default",
+  "max_seq_length": 2048,
+  "run_single_layer": true,
+  "tensor_parallel_size": 1,
+  "pipeline_parallel_size": 1,
+  "architecture_source": "https://huggingface.co/facebook/opt-1.3b/blob/main/config.json"
+}

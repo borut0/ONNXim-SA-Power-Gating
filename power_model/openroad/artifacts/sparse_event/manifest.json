@@ -1,0 +1,39 @@
+{
+  "artifact_version": 1,
+  "design": "sa_idle_predictor_controller_clock_gated",
+  "flow_variant": "sparse_event",
+  "platform": "ASAP7",
+  "corner": "TT",
+  "openroad_version": "26Q3-771-g7cfb2105c9",
+  "orfs_container": {
+    "tag_used": "openroad/orfs:latest",
+    "image_id": "sha256:0879dde64b3b0233c477631a912c40fa74bd7f1bb11ddf04c6df697ff412e7ae",
+    "repo_digest": "openroad/orfs@sha256:0879dde64b3b0233c477631a912c40fa74bd7f1bb11ddf04c6df697ff412e7ae",
+    "created": "2026-08-06T00:16:32.547253449Z"
+  },
+  "synthesis_summary": {
+    "mapped_icg_count": 2,
+    "mapped_clock_buffer_count": 2,
+    "design_area_um2": 435,
+    "clock_period_constraint_ps": 1000,
+    "minimum_period_ps": 760.46,
+    "fmax_mhz": 1314.99,
+    "setup_slack_ps": 224.88,
+    "timing_met": true
+  },
+  "sha256": {
+    "controller_sparse_event_yosys.v": "abee91db56849396baa1a802aebad63cd9a9cc87f3b8d1347c053461941e2fe9",
+    "controller_sparse_event_synth.sdc": "a8b1f2df85fa1c924ef5f79fa0eaf5a2b48e6563b601b1f3391b8aded76d2460",
+    "controller_sparse_event_synthesis.txt": "41de9a7603bb33dfd7a5b659ba9f7261ba8e651495cb80406839b88df3178b82",
+    "controller_sparse_event_sta.txt": "5f9e06a148b3f72e4411ad10693bcb538b519c61712433096c583053f7b39f0b",
+    "power_reports_combined": "ab44de655c182e729178a429e0f93b7f0b6fe20da220c3d74a3915cecb722f91"
+  },
+  "power_report_file_count": 220,
+  "annotation_requirement": "Each retained workload report includes zero unannotated pins; verbose OpenROAD logs and VCDs are excluded.",
+  "excluded_generated_artifacts": [
+    "1_synth.odb",
+    "intermediate ORFS stage databases",
+    "raw VCD activity",
+    "third-party platform libraries"
+  ]
+}

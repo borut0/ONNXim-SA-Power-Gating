@@ -1,0 +1,18 @@
+{
+  "acceptance_rule": "Reject if unmodeled_operator_counts is non-empty. OperationFactory would otherwise silently represent those nodes as zero-work Dummy operations. Also reject grouped/depthwise Conv because the current weight-stationary ConvWS source marks that path unsupported and it fails runtime SRAM allocation validation. A pass still requires ONNXim initialization/completion and mapping-capacity validation.",
+  "explicit_pass_through_operator_counts": {},
+  "modeled_operator_counts": {
+    "BiasGelu": 2,
+    "MatMul": 3
+  },
+  "name": "mlp_gelu",
+  "node_count": 5,
+  "operator_counts": {
+    "BiasGelu": 2,
+    "MatMul": 3
+  },
+  "path": "models/mlp_gelu/mlp_gelu.onnx",
+  "strict_operator_audit_pass": true,
+  "unmodeled_operator_counts": {},
+  "unsupported_grouped_convolution_count": 0
+}

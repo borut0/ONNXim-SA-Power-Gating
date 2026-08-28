@@ -1,0 +1,33 @@
+{
+  "status": "direct_hspice_measurement",
+  "tool": "Synopsys HSPICE X-2025.06-SP2",
+  "model": "ASAP7 7nm_TT_160803.pm",
+  "model_name": "pmos_rvt",
+  "vdd_v": 0.7,
+  "temperature_c": 25.0,
+  "unit_geometry": {
+    "width_nm": 81,
+    "length_nm": 20,
+    "nfin": 3
+  },
+  "on_current_a_by_droop_percent": {
+    "2.5": 0.0000065601,
+    "5.0": 0.0000129062,
+    "7.5": 0.0000190019,
+    "10.0": 0.0000248138
+  },
+  "off_current_a_by_virtual_vdd_fraction": {
+    "0.0": 6.77551e-11,
+    "0.25": 5.31463e-11,
+    "0.5": 4.16152e-11,
+    "0.9": 2.67519e-11
+  },
+  "multiplicity_validation": {
+    "ion_m1_a": 0.0000129062,
+    "ion_m10_a": 0.0001290616,
+    "ion_m100_a": 0.0012906,
+    "ratio_m10_m1": 10.0,
+    "ratio_m100_m1": 100.0
+  },
+  "scope": "Unit-device I-V only; this file does not select an array header size."
+}

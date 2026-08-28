@@ -1,0 +1,199 @@
+{
+  "aggregate": {
+    "core_components": {
+      "core_request_fifo_empty_cycles": 32844672,
+      "core_request_fifo_empty_percent": 65.43480783231692,
+      "core_request_fifo_nonempty_cycles": 17349824,
+      "core_request_fifo_nonempty_percent": 34.56519216768309,
+      "neither_sa_nor_vector_active_cycles": 36730538,
+      "neither_sa_nor_vector_active_percent": 73.17642555869074,
+      "sa_active_cycles": 13419267,
+      "sa_active_percent": 26.73453878289763,
+      "sa_and_vector_active_cycles": 62853,
+      "sa_and_vector_active_percent": 0.12521890846358932,
+      "sa_idle_cycles": 36775229,
+      "sa_idle_percent": 73.26546121710237,
+      "sa_or_vector_active_cycles": 13463958,
+      "sa_or_vector_active_percent": 26.823574441309262,
+      "vector_active_cycles": 107544,
+      "vector_active_percent": 0.21425456687522074,
+      "vector_idle_cycles": 50086952,
+      "vector_idle_percent": 99.78574543312477
+    },
+    "core_cycles": 50194496,
+    "execution_attribution": {
+      "compute": 13463958,
+      "dependency_stall": 1402941,
+      "memory_stall": 33316253,
+      "other": 573346,
+      "percent_of_core_cycles": {
+        "compute": 26.823574441309262,
+        "dependency_stall": 2.7950096361162786,
+        "memory_stall": 66.37431522372493,
+        "other": 1.1422487437666473,
+        "scheduler_stall": 2.864851955082884
+      },
+      "scheduler_stall": 1437998
+    },
+    "sa_architectural_states": {
+      "cycle_counts": {
+        "ACTIVE_GEMM": 0,
+        "ACTIVE_GEMM_PRELOAD_OPCODE": 13419267,
+        "ACTIVE_UNKNOWN": 0,
+        "IDLE_COMMITTED_GEMM_PRELOAD_START_DELAY": 2263635,
+        "IDLE_COMMITTED_GEMM_START_DELAY": 0,
+        "IDLE_DEPENDENCY_STALL": 0,
+        "IDLE_INSTRUCTION_DISPATCH": 73363,
+        "IDLE_MEMORY_STALL": 32957271,
+        "IDLE_OTHER": 218,
+        "IDLE_SCHEDULER_STALL": 1437998,
+        "IDLE_VECTOR_ACTIVE": 42744
+      },
+      "percent_of_core_cycles": {
+        "ACTIVE_GEMM": 0.0,
+        "ACTIVE_GEMM_PRELOAD_OPCODE": 26.73453878289763,
+        "ACTIVE_UNKNOWN": 0.0,
+        "IDLE_COMMITTED_GEMM_PRELOAD_START_DELAY": 4.509727520722591,
+        "IDLE_COMMITTED_GEMM_START_DELAY": 0.0,
+        "IDLE_DEPENDENCY_STALL": 0.0,
+        "IDLE_INSTRUCTION_DISPATCH": 0.14615745917640052,
+        "IDLE_MEMORY_STALL": 65.6591332244874,
+        "IDLE_OTHER": 0.00043431056664061337,
+        "IDLE_SCHEDULER_STALL": 2.864851955082884,
+        "IDLE_VECTOR_ACTIVE": 0.08515674706645127
+      }
+    }
+  },
+  "dram": {
+    "accepted_read_bytes": 2956492800,
+    "accepted_read_requests": 92390400,
+    "accepted_requests": 94187520,
+    "accepted_write_bytes": 57507840,
+    "accepted_write_requests": 1797120,
+    "activity_semantics": "channel has at least one accepted demand request whose DRAM completion has not yet become visible to ONNXim",
+    "all_channels_demand_idle_percent": 26.581622309695703,
+    "any_channel_demand_active_cycles": 11060019,
+    "any_channel_demand_active_percent": 73.4183776903043,
+    "bandwidth_semantics": "completed transactions * configured nBL / (DRAM cycles * channels); same normalization as the current Ramulator2 wrapper",
+    "channel_demand_active_cycles": [
+      10911902,
+      10915024,
+      10913348,
+      10918860,
+      10911025,
+      10916356,
+      10915175,
+      10914940,
+      10917344,
+      10917216,
+      10919977,
+      10910676,
+      10917151,
+      10910585,
+      10914817,
+      10915563
+    ],
+    "completed_requests": 94187520,
+    "dram_channels": 16,
+    "dram_cycles": 15064374,
+    "mean_channel_demand_active_percent": 72.45569870676339,
+    "mean_channel_demand_idle_percent": 27.544301293236614,
+    "outstanding_requests_at_end": 0,
+    "peak_total_outstanding_requests": 6007,
+    "transaction_bandwidth_utilization_percent": 39.07709673166638,
+    "version": 1
+  },
+  "interpretation_limits": [
+    "SA and vector active percentages may overlap and are reported separately.",
+    "NoC demand-active means at least one ONNXim memory packet is in flight; it is not router-level link utilization.",
+    "DRAM demand-active means accepted-but-not-completed demand occupancy; transaction bandwidth utilization is reported separately.",
+    "Memory-stage averages are request-weighted; component active percentages are cycle-weighted."
+  ],
+  "malformed_line_numbers": [],
+  "memory_request_stages": {
+    "cycle_semantics": "elapsed simulator core-cycle timestamps at each MemoryAccess stage transition",
+    "detailed_percentiles_enabled": false,
+    "requests": 94187520,
+    "stages": {
+      "core_queue": {
+        "average_cycles": 3149.528268713307,
+        "maximum_cycles": 23620,
+        "minimum_cycles": 1
+      },
+      "dram": {
+        "average_cycles": 440.58448094821904,
+        "maximum_cycles": 25247,
+        "minimum_cycles": 1
+      },
+      "icnt_to_core": {
+        "average_cycles": 8.0,
+        "maximum_cycles": 8,
+        "minimum_cycles": 8
+      },
+      "icnt_to_memory": {
+        "average_cycles": 2845.148590673159,
+        "maximum_cycles": 25183,
+        "minimum_cycles": 8
+      }
+    },
+    "version": 1
+  },
+  "noc": {
+    "activity_semantics": "at least one ONNXim memory packet is in flight from injection through destination delivery",
+    "delivered_packets": 188375040,
+    "demand_active_cycles": 9357426,
+    "demand_active_percent": 74.56933923591941,
+    "demand_idle_cycles": 3191198,
+    "demand_idle_percent": 25.430660764080585,
+    "icnt_cycles": 12548624,
+    "injected_packets": 188375040,
+    "outstanding_packets_at_end": 0,
+    "peak_outstanding_packets": 51304,
+    "version": 1
+  },
+  "record_counts": {
+    "COMPONENT_CORE": 4,
+    "COMPONENT_DRAM": 1,
+    "COMPONENT_MEMORY_STAGES": 1,
+    "COMPONENT_NOC": 1,
+    "COMPONENT_SYSTEM": 1,
+    "SA_STATE_BREAKDOWN": 4
+  },
+  "source_log": "power_model/workload_suite/logs/opt125m_12l_full.log",
+  "system": {
+    "core_cycles": 12548624,
+    "core_frequency_mhz": 1000,
+    "core_to_noc_packets": 94187520,
+    "dram_channels": 16,
+    "dram_frequency_mhz": 1200,
+    "dram_to_noc_packets": 94187520,
+    "icnt_cycles": 12548624,
+    "icnt_frequency_mhz": 1000,
+    "noc_to_core_packets": 94187520,
+    "noc_to_dram_packets": 94187520,
+    "num_cores": 4,
+    "version": 1
+  },
+  "validation": {
+    "all_core_accounting_exact": true,
+    "all_sa_state_accounting_exact": true,
+    "component_core_cycle_total_exact": true,
+    "dram_accept_count_exact": true,
+    "dram_completion_count_exact": true,
+    "dram_drained": true,
+    "dram_request_completion_exact": true,
+    "expected_core_records": true,
+    "expected_sa_state_records": true,
+    "no_malformed_records": true,
+    "noc_delivery_count_exact": true,
+    "noc_drained": true,
+    "noc_injection_count_exact": true,
+    "one_dram_record": true,
+    "one_memory_stage_record": true,
+    "one_noc_record": true,
+    "one_system_record": true,
+    "request_flow_exact": true,
+    "response_flow_exact": true
+  },
+  "validation_pass": true
+}

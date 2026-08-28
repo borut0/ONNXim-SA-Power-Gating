@@ -1,0 +1,72 @@
+{
+  "cores": {
+    "0": {
+      "workload_cycles": 661008,
+      "sleep_episodes": 0,
+      "sleep_cycles": 0,
+      "gross_sa_savings_j": 0.0,
+      "controller_power_w": 3.320909673e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 2.1951478611303843e-08,
+      "net_savings_j": -2.1951478611303843e-08
+    },
+    "1": {
+      "workload_cycles": 661008,
+      "sleep_episodes": 0,
+      "sleep_cycles": 0,
+      "gross_sa_savings_j": 0.0,
+      "controller_power_w": 3.334986468e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 2.204452735239744e-08,
+      "net_savings_j": -2.204452735239744e-08
+    },
+    "2": {
+      "workload_cycles": 661008,
+      "sleep_episodes": 0,
+      "sleep_cycles": 0,
+      "gross_sa_savings_j": 0.0,
+      "controller_power_w": 3.316890434e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 2.192491111997472e-08,
+      "net_savings_j": -2.192491111997472e-08
+    },
+    "3": {
+      "workload_cycles": 661008,
+      "sleep_episodes": 0,
+      "sleep_cycles": 0,
+      "gross_sa_savings_j": 0.0,
+      "controller_power_w": 3.332522101e-05,
+      "controller_annotation_source": "standalone_power_log",
+      "controller_energy_j": 2.2028237689378076e-08,
+      "net_savings_j": -2.2028237689378076e-08
+    }
+  },
+  "aggregate": {
+    "workload_cycles": 2644032,
+    "sleep_episodes": 0,
+    "sleep_cycles": 0,
+    "gross_sa_power_gating_savings_j": 0.0,
+    "controller_energy_j": 8.794915477305409e-08,
+    "net_savings_j": -8.794915477305409e-08,
+    "controller_fraction_of_gross_savings": null,
+    "episodes_below_measured_curve": 0
+  },
+  "method": {
+    "sleep_timing": "exact synthesized-controller RTL replay episodes",
+    "sa_event_energy": "Direct connected 1x1 SA HSPICE duration sweep, ASAP7 TT, 25 C, M300 equivalent RVT PMOS header",
+    "controller_power": "100%-annotated ASAP7 TT gate-level workload activity",
+    "controller_power_report_stem": "controller_clock_gated_sparse_event_resnet34",
+    "controller_time": "full per-core trace at curve frequency",
+    "short_episode_policy": "clamp-min",
+    "short_episode_policy_detail": "below-minimum episodes charged the full shortest measured event energy",
+    "sa_scaling": "linear per-PE scaling; M300/PE droop validated directly at 1x1 and 4x4",
+    "limitations": [
+      "placed power-grid parasitics",
+      "isolation cells",
+      "clock-control logic",
+      "architectural reset/control energy",
+      "controller clock-tree and routed-interconnect power",
+      "delay-dependent controller glitch power"
+    ]
+  }
+}

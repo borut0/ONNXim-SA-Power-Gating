@@ -1,0 +1,91 @@
+{
+  "definition": "Cycle-weighted sums over independently validated compact component summaries.",
+  "excluded_metric": {
+    "metric": "vector-unit activity/idleness",
+    "reason": "Excluded from component-selection claims because the current simulator vector counter is suspected to be incorrect; no quantitative conclusion is drawn from it."
+  },
+  "weighted_aggregate": {
+    "workload_count": 16,
+    "core_cycles": 898576188,
+    "sa_idle_cycles": 649866804,
+    "fifo_empty_cycles": 278943809,
+    "icnt_cycles": 224644047,
+    "noc_idle_cycles": 28221757,
+    "dram_cycles": 269680718,
+    "dram_all_idle_cycles": 34244011,
+    "sa_idle_percent": 72.32183677673862,
+    "core_request_fifo_empty_percent": 31.042866784713862,
+    "noc_demand_idle_percent": 12.562877751218576,
+    "dram_all_channels_demand_idle_percent": 12.697982730823195
+  },
+  "sources": [
+    {
+      "path": "power_model/workload_suite/summaries/alexnet.final.json",
+      "sha256": "b4d02c17fb0f870a1085a6577b4c58d5a07987ea00d9f8087865b0257e72aabc"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/resnet18.final.json",
+      "sha256": "f1a38d7e734513876acb59d1bfaadabd146bd685df061dc3b65cff45a1cf4676"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/resnet34.final.json",
+      "sha256": "3f10d1b8fbff399ef4f44668e166df65aded1b87154ccecdfd40d28f8dd7916e"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/resnet50.final.json",
+      "sha256": "6f702c1953ff02873d0288e6ada419ad8d9bbe8bedacc2db5c023ac1c8b74b4a"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/resnet101.final.json",
+      "sha256": "42716303007c801ab288771d8e65eb757d81e633983150e5f8201f4744c37052"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/vgg11.final.json",
+      "sha256": "ae01cde3e88fcc2e5977c58237783a61774472e1fd9bbed81e4a8075a386a58a"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/vgg16.final.json",
+      "sha256": "d9d5a8fc644870cdacb6425fd9527cc74438726d57c04122a3291ce82ffff217"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/vgg19.final.json",
+      "sha256": "81f7edc8cbaac19fc97be274000672ba1af46df03951530e192b6d71277b0898"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/wide_resnet50_2.final.json",
+      "sha256": "5828738518ac10123ee4d864b0a669b6e488cfa7cf9040aaf94085741f3fcd67"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/gpt2.final.json",
+      "sha256": "197322d52f354e064adf5b334a661a2c43377c5890411ca3485f8b9d09ca3b2f"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/opt125m_12l_full.json",
+      "sha256": "53f131376e8cd4f9bab052c8070f0cd78379ac17b25e98fa9c3da5155aa11f15"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/opt_1_3b_final.json",
+      "sha256": "8bb5e20fe0767d32f8e6dd1984f7b0bf3364808038abf2e53abb89e104563c86"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/opt_2_7b_final.json",
+      "sha256": "8efc13246fa0d6aa49f135ef10bb892390510a62d9fe37a932a4212616c0c14a"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/opt_6_7b_final.json",
+      "sha256": "f1ab620374a5dca5e5cfeb46747216d155566e47c3ac8922f015e64ce5a2aebf"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/opt_66b_final.json",
+      "sha256": "1f84fb91a6a7e64dc47e757e9a00fdb1b1c03df2614f09abe1ffe9c3c0b922b9"
+    },
+    {
+      "path": "power_model/workload_suite/summaries/llama3_8b_32_8_final.json",
+      "sha256": "eb9f7efe3108e17695379949539d440a7501acd8a9840e3513e394748b6bd0d5"
+    }
+  ],
+  "component_selection_csv": {
+    "path": "power_model/workload_suite/evidence/component_selection.csv",
+    "sha256": "3f9e9dd9fdd57173a530261e143fa7d9df03d05d4c8c8917d7acf70052126c6b"
+  }
+}

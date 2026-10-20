@@ -67,6 +67,34 @@ class Core {
     UNKNOWN
   };
 
+  enum class InstructionBlockReason {
+    NONE,
+    MEMORY,
+    DEPENDENCY,
+    EXECUTION_QUEUE_BUSY,
+    SA_PIPELINE_FULL,
+    VECTOR_BUSY,
+    POWER_STATE_WAKE,
+    UNKNOWN
+  };
+
+  struct InstructionFlowEvent {
+    cycle_type cycle = 0;
+    uint64_t tile_id = 0;
+    uint32_t layer_id = 0;
+    uint32_t fused_op_id = 0;
+    std::string operation;
+    uint64_t instruction_ordinal = 0;
+    Opcode opcode = Opcode::BAR;
+    bool issued = false;
+    InstructionBlockReason block_reason = InstructionBlockReason::NONE;
+    uint64_t previous_issued_tile_id = 0;
+    bool tile_switch = false;
+    size_t next_sa_prefix_before = 0;
+    uint64_t weight_block_id = 0;
+    bool weight_block_known = false;
+  };
+
   enum class CoreAttributionCategory {
     COMPUTE,
     MEMORY_STALL,
@@ -76,6 +104,7 @@ class Core {
   };
 
   virtual bool can_issue_compute(std::unique_ptr<Instruction>& inst);
+  virtual InstructionBlockReason specialized_compute_block_reason() const;
   virtual cycle_type get_inst_compute_cycles(std::unique_ptr<Instruction>& inst) = 0;
   virtual void update_stats();
   virtual void finish_compute_pipeline();
@@ -88,6 +117,7 @@ class Core {
                                          int buffer_id) const;
   OperandWaitReason get_store_wait_reason(const Instruction& inst) const;
   void record_instruction_issue_wait(OperandWaitReason reason);
+  void record_compute_operand_reads(const Instruction& inst);
   void attribute_core_cycle(CoreAttributionCategory category);
   virtual void print_execution_time_attribution();
   cycle_type attribution_total_cycles() const;
@@ -129,6 +159,7 @@ class Core {
   int _running_layer;
   uint32_t tile_rr = 0;
   uint64_t _next_measurement_tile_id = 1;
+  bool _next_sa_metadata_enabled = false;
   std::deque<std::unique_ptr<Tile>> _tiles;
   std::queue<std::unique_ptr<Tile>> _finished_tiles;
 
@@ -171,6 +202,9 @@ class Core {
   bool _last_core_cycle_dependency_block = false;
   bool _last_core_cycle_unknown_block = false;
   bool _last_core_cycle_compute_issue_block = false;
+  std::vector<InstructionFlowEvent> _last_instruction_flow_events;
+  std::vector<uint64_t> _last_retired_tile_ids;
+  uint64_t _last_issued_tile_id = 0;
 
   cycle_type _attrib_compute_cycles = 0;
   cycle_type _attrib_memory_stall_cycles = 0;
@@ -181,6 +215,7 @@ class Core {
   // Compact aggregate-only paper characterization.  This flag never feeds
   // scheduling or timing decisions.
   bool _component_characterization = false;
+  uint64_t _all_sram_modeled_idle_cycles = 0;
 
   // for analysis
   uint64_t _stat_ex_issue = 0;

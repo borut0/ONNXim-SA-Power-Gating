@@ -1,0 +1,129 @@
+\subsection{RTL Controller and Clock-Gating Organization}
+\label{sec:rtl-clock-gating}
+
+We implement the causal predictor as a synthesizable SystemVerilog controller
+with 20-bit horizon and memory-ticket fields.  The controller stores one
+descriptor for each of the two resident tile slots.  A descriptor contains
+tile presence, the first future SA opcode and its prefix distance, remaining
+tile work, and the allocation, validity, pending-memory, tail-ticket, and
+pending-response state of at most two source operands.  The combinational
+bound logic computes the prefix, request-FIFO, response-drain, visible-work,
+and future-tile bounds described in
+Secs.~\ref{sec:causal-predictor} and
+\ref{sec:causal-bound-components}.
+
+The implementation separates this state into three clock domains.  First, a
+descriptor domain captures resident-tile metadata only on an explicit write
+to either tile slot.  Second, an evaluation domain implements the three-stage
+certificate pipeline.  Third, a small control domain remains on the root
+clock so that it can commit an entry, decrement the frozen sleep countdown,
+and apply the immediate-wake conditions.  Keeping the control domain
+available avoids relying on a clock that the controller itself may stop.
+
+The evaluation pipeline is activated only by a source-grounded sampling
+event.  A new sample is requested when the complete entry-eligibility
+predicate changes from false to true, after a semantic descriptor update, or
+after the countdown domain exits a sleep interval.  Once a sample enters the
+pipeline, registered valid bits hold its clock enable active through bound
+calculation and entry commit.  Four enabled edges are sufficient to capture
+stage~1, propagate stages~2 and~3, and commit the result.  Per-cycle dequeue
+progress and pending-response-count reductions do not independently restart
+the evaluation pipeline because they can only shorten the previously observed
+lower bound.  Their current values are sampled when a fresh certificate is
+constructed.
+
+The wrapper instantiates two ASAP7 integrated clock-gating cells and two local
+clock buffers.  One gate--buffer pair drives the certificate-evaluation
+domain; the other drives the descriptor-register domain.  The implementation
+uses \texttt{ICGx2\_ASAP7\_75t\_R} clock gates and
+\texttt{BUFx24\_ASAP7\_75t\_R} buffers.  The synthesized netlist retains
+exactly two integrated clock gates and two clock buffers.  The small event
+detector and countdown/wake logic remain on the ungated root clock.
+
+Clock gating does not change the certificate acceptance rule.  The wrapped
+controller receives the same architectural descriptor and queue state as the
+continuously evaluated reference controller.  Descriptor writes keep the
+descriptor clock enabled and leave a pending event that initiates evaluation
+only after the updated descriptor has been registered.  A certificate-stage
+valid bit keeps the evaluation clock enabled until the in-flight sample has
+been consumed.  The resulting \texttt{sleep\_request} is therefore produced
+from a complete registered certificate rather than from a partially updated
+descriptor.
+
+The RTL boundary includes the descriptor registers, causal-bound arithmetic,
+certificate pipeline, clock-gating wrapper, event detector, and countdown
+control.  The current ONNXim trace generator constructs resident descriptors
+by scanning software instruction deques.  A hardware descriptor producer
+that replaces this software scan is outside the synthesized controller
+boundary; consequently, its area and power are not included in the reported
+controller implementation.  Likewise, the controller emits the requested
+SA power state, but isolation cells, a physical SA power switch, and their
+power-distribution network are evaluated separately rather than instantiated
+inside this RTL block.
+
+\subsection{Replay Equivalence and Safety Validation}
+\label{sec:rtl-replay-validation}
+
+We validate the clock-gated RTL using cycle-indexed architectural traces from
+the same workload executions used in the evaluation.  Each trace begins with
+a complete cycle-zero record and then contains state-change records.  The
+testbench holds each record until the next recorded cycle, thereby
+reconstructing the controller inputs for every intervening cycle.  It rejects
+an empty trace, a malformed record, or a non-monotonic cycle sequence.
+
+Each core trace is replayed twice: once through the continuously evaluated
+reference controller and once through the clock-gated wrapper.  For both
+runs, the validation flow records the trace marker, every sleep episode, and
+the final replay summary.  The two emitted record streams are compared
+byte-for-byte.  Any difference in sleep entry, sleep exit, episode duration,
+transition count, or summary field causes the comparison to fail.  A workload
+is accepted only after all four core traces pass this comparison.
+
+The testbench additionally increments a safety-violation counter on every
+cycle satisfying
+\begin{equation}
+  \texttt{sleep\_request} \land \texttt{sa\_active}.
+  \label{eq:replay-safety-violation}
+\end{equation}
+It terminates with an error when this counter is nonzero.  This check directly
+tests that a requested non-retentive OFF interval never overlaps SA activity
+observed in the architectural trace.
+
+Table~\ref{tab:rtl-replay-validation} summarizes the retained replay records
+for the 16 workload configurations in Table~\ref{tab:component-characterization}.
+The totals are sums of the four per-core summaries for every workload.
+
+\begin{table}[t]
+  \centering
+  \caption{Aggregate RTL replay-validation results.}
+  \label{tab:rtl-replay-validation}
+  \begin{tabular}{lr}
+    \toprule
+    Metric & Measured value \\
+    \midrule
+    Workload configurations & 16 \\
+    Core traces & 64 \\
+    Replayed core-cycles & 898,576,188 \\
+    Requested sleep cycles & 191,126,583 \\
+    Sleep-state transitions & 1,674,074 \\
+    Completed sleep episodes & 837,037 \\
+    Sleep--SA-activity violations & 0 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+All 64 retained core replays produced identical reference and clock-gated
+sleep-record streams, and all reported zero violations of
+Eq.~\eqref{eq:replay-safety-violation}.  These results establish equivalence
+of the two controller implementations for the evaluated traces and show that
+their requested OFF intervals do not overlap trace-observed SA activity.
+
+The scope of this result is intentionally limited.  Byte-identical replay is
+not a formal proof over all possible input sequences, and the implemented
+safety counter checks sleep--activity overlap rather than every internal
+invariant.  Moreover, power-state requests are evaluated in shadow replay and
+do not alter ONNXim scheduling or insert a physical wake-up delay.  Therefore,
+the replay result does not by itself establish zero performance penalty for a
+fully integrated power-gated NPU.  Such a claim would require feeding the
+measured transition latency back into architectural execution and verifying
+the resulting timing behavior.

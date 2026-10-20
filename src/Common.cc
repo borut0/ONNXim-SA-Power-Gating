@@ -1,5 +1,10 @@
 #include "Common.h"
 
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+#include <tuple>
+
 uint32_t generate_id() {
   static uint32_t id_counter{0};
   return id_counter++;
@@ -7,6 +12,197 @@ uint32_t generate_id() {
 uint32_t generate_mem_access_id() {
   static uint32_t id_counter{0};
   return id_counter++;
+}
+
+uint64_t intern_sa_weight_block(
+    const std::vector<addr_type>& global_weight_addresses,
+    uint32_t tile_m, uint32_t tile_k) {
+  if (global_weight_addresses.empty() || tile_m == 0 || tile_k == 0) {
+    return 0;
+  }
+
+  using WeightKey =
+      std::tuple<uint32_t, uint32_t, std::vector<addr_type>>;
+  static std::map<WeightKey, uint64_t> ids;
+  static uint64_t next_id = 1;
+  WeightKey key{tile_m, tile_k, global_weight_addresses};
+  auto [iter, inserted] = ids.emplace(std::move(key), next_id);
+  if (inserted) {
+    next_id++;
+  }
+  return iter->second;
+}
+
+void Tile::finalize_sa_metadata() {
+  if (sa_metadata_finalized) {
+    return;
+  }
+
+  sa_descriptors.clear();
+  size_t prefix = 0;
+  size_t ordinal = 0;
+  bool sa_phase_open = false;
+  uint64_t preload_sequence = 0;
+  uint64_t cumulative_memory_requests = 0;
+  std::map<addr_type, SaInstructionDescriptor::PlannedMemorySource>
+      planned_memory_sources;
+  for (const std::unique_ptr<Instruction>& instruction : instructions) {
+    instruction->tile_instruction_ordinal = ordinal;
+    if (instruction->opcode == Opcode::MOVIN) {
+      if (instruction->src_addrs.size() >
+          std::numeric_limits<uint64_t>::max() -
+              cumulative_memory_requests) {
+        throw std::overflow_error(
+            "tile planned memory-request count overflow");
+      }
+      cumulative_memory_requests += instruction->src_addrs.size();
+      planned_memory_sources[instruction->dest_addr] =
+          SaInstructionDescriptor::PlannedMemorySource{
+              instruction->dest_addr, ordinal,
+              instruction->src_addrs.size(), cumulative_memory_requests};
+    }
+    if (instruction->opcode == Opcode::GEMM ||
+        instruction->opcode == Opcode::GEMM_PRELOAD) {
+      const bool preload_boundary =
+          instruction->opcode == Opcode::GEMM_PRELOAD ||
+          instruction->sa_analytical_preload_boundary;
+      if (!sa_phase_open && !preload_boundary) {
+        throw std::logic_error(
+            "each contiguous tile SA phase must begin with a preload boundary");
+      }
+      if (preload_boundary) {
+        preload_sequence++;
+      }
+      sa_phase_open = true;
+      instruction->sa_preload_sequence = preload_sequence;
+      std::vector<SaInstructionDescriptor::PlannedMemorySource>
+          required_memory_sources;
+      bool memory_plan_complete = true;
+      for (addr_type address : instruction->src_addrs) {
+        if (address >= ACCUM_SPAD_BASE) {
+          continue;
+        }
+        const auto producer = planned_memory_sources.find(address);
+        if (producer == planned_memory_sources.end()) {
+          memory_plan_complete = false;
+          continue;
+        }
+        const auto duplicate = std::find_if(
+            required_memory_sources.begin(), required_memory_sources.end(),
+            [address](const auto& source) {
+              return source.address == address;
+            });
+        if (duplicate == required_memory_sources.end()) {
+          required_memory_sources.push_back(producer->second);
+        }
+      }
+      sa_descriptors.push_back(SaInstructionDescriptor{
+          .instruction = instruction.get(),
+          .opcode = instruction->opcode,
+          .instruction_ordinal = ordinal,
+          .prefix_from_previous_sa = prefix,
+          .weight_block_id = instruction->sa_weight_block_id,
+          .weight_block_known = instruction->sa_weight_block_known,
+          .preload_sequence = preload_sequence,
+          .analytical_preload_boundary =
+              instruction->sa_analytical_preload_boundary,
+          .planned_memory_sources = std::move(required_memory_sources),
+          .memory_plan_complete = memory_plan_complete});
+      prefix = 0;
+    } else {
+      sa_phase_open = false;
+      prefix++;
+    }
+    ordinal++;
+  }
+  sa_metadata_finalized = true;
+  reset_runtime_sa_metadata();
+}
+
+void Tile::reset_runtime_sa_metadata() {
+  if (!sa_metadata_finalized) {
+    throw std::logic_error("SA metadata used before tile finalization");
+  }
+
+  next_sa_descriptor_index = 0;
+  if (sa_descriptors.empty()) {
+    next_sa_candidate_found = false;
+    next_sa_opcode = Opcode::BAR;
+    next_sa_prefix_count = 0;
+    next_sa_instruction = nullptr;
+    next_sa_weight_block_id = 0;
+    next_sa_weight_block_known = false;
+    next_sa_preload_sequence = 0;
+    next_sa_analytical_preload_boundary = false;
+    issued_planned_memory_requests = 0;
+    issued_planned_memory_requests_valid = true;
+    return;
+  }
+
+  const SaInstructionDescriptor& descriptor = sa_descriptors.front();
+  next_sa_candidate_found = true;
+  next_sa_opcode = descriptor.opcode;
+  next_sa_prefix_count = descriptor.prefix_from_previous_sa;
+  next_sa_instruction = descriptor.instruction;
+  next_sa_weight_block_id = descriptor.weight_block_id;
+  next_sa_weight_block_known = descriptor.weight_block_known;
+  next_sa_preload_sequence = descriptor.preload_sequence;
+  next_sa_analytical_preload_boundary =
+      descriptor.analytical_preload_boundary;
+  issued_planned_memory_requests = 0;
+  issued_planned_memory_requests_valid = true;
+}
+
+void Tile::advance_sa_metadata(const Instruction* issued_instruction) {
+  if (!sa_metadata_finalized) {
+    throw std::logic_error("SA metadata advanced before tile finalization");
+  }
+  if (issued_instruction != nullptr &&
+      issued_instruction->opcode == Opcode::MOVIN) {
+    const uint64_t count = issued_instruction->src_addrs.size();
+    if (count > std::numeric_limits<uint64_t>::max() -
+                    issued_planned_memory_requests) {
+      issued_planned_memory_requests_valid = false;
+    } else {
+      issued_planned_memory_requests += count;
+    }
+  }
+  if (!next_sa_candidate_found) {
+    return;
+  }
+
+  if (next_sa_instruction != issued_instruction) {
+    if (next_sa_prefix_count == 0) {
+      throw std::logic_error("issued instruction does not match SA descriptor");
+    }
+    next_sa_prefix_count--;
+    return;
+  }
+
+  next_sa_descriptor_index++;
+  if (next_sa_descriptor_index >= sa_descriptors.size()) {
+    next_sa_candidate_found = false;
+    next_sa_opcode = Opcode::BAR;
+    next_sa_prefix_count = 0;
+    next_sa_instruction = nullptr;
+    next_sa_weight_block_id = 0;
+    next_sa_weight_block_known = false;
+    next_sa_preload_sequence = 0;
+    next_sa_analytical_preload_boundary = false;
+    return;
+  }
+
+  const SaInstructionDescriptor& descriptor =
+      sa_descriptors[next_sa_descriptor_index];
+  next_sa_candidate_found = true;
+  next_sa_opcode = descriptor.opcode;
+  next_sa_prefix_count = descriptor.prefix_from_previous_sa;
+  next_sa_instruction = descriptor.instruction;
+  next_sa_weight_block_id = descriptor.weight_block_id;
+  next_sa_weight_block_known = descriptor.weight_block_known;
+  next_sa_preload_sequence = descriptor.preload_sequence;
+  next_sa_analytical_preload_boundary =
+      descriptor.analytical_preload_boundary;
 }
 
 addr_type allocate_address(uint32_t size) {

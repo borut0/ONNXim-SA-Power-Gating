@@ -1,0 +1,253 @@
+\subsection{ASAP7 Synthesis, Timing, Area, and Controller Power}
+\label{sec:asap7-controller-characterization}
+
+We synthesized the clock-gated controller with OpenROAD Flow Scripts using
+the predictive ASAP7 7.5-track RVT standard-cell platform.  The synthesis
+constraint is a 1.000-ns core clock, matching the 1-GHz ONNXim core frequency,
+with 200-ps input and output delays.  The implementation contains the complete
+controller RTL described in Sec.~\ref{sec:rtl-clock-gating}, including both
+resident descriptors, causal-bound arithmetic, the three-stage certificate
+pipeline, the countdown controller, two explicit integrated clock gates, and
+two local clock buffers.
+
+Table~\ref{tab:controller-physical-summary} reports the retained
+post-synthesis results.  The timing report uses ASAP7 RVT fast-corner NLDM
+libraries and an ideal clock network.  At the 1.000-ns target, the worst
+reported setup slack is positive by 224.88~ps.  The minimum reported clock
+period is 760.46~ps, corresponding to 1.31499~GHz.  We use 1~GHz in all
+architectural and energy calculations; the reported maximum frequency is a
+synthesis-stage timing result rather than the operating frequency assumed by
+the evaluation.
+
+\begin{table}[t]
+  \centering
+  \caption{Post-synthesis controller implementation in ASAP7.}
+  \label{tab:controller-physical-summary}
+  \begin{tabular}{lr}
+    \toprule
+    Metric & Measured value \\
+    \midrule
+    Target clock period & 1.000 ns \\
+    Worst setup slack & $+224.88$ ps \\
+    Minimum reported period & 760.46 ps \\
+    Reported maximum frequency & 1.31499 GHz \\
+    Standard-cell area & 435 $\mu\mathrm{m}^{2}$ \\
+    Mapped integrated clock gates & 2 \\
+    Mapped local clock buffers & 2 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The controller area is compared with the structurally extrapolated
+128$\times$128 SA area in Sec.~\ref{sec:sa-scaling}.  Using
+3.800769~mm$^{2}$ for that extrapolated array gives a controller-to-SA area
+ratio of 0.01145\%.  This percentage inherits the array-area extrapolation and
+must not be interpreted as a measured placed 128$\times$128 area overhead.
+
+Controller power is evaluated at the ASAP7 RVT TT corner using workload
+activity rather than a default toggle rate.  Each architectural controller
+trace is replayed through the mapped gate-level netlist, producing a VCD over
+the full workload interval after reset.  OpenSTA reports 13,207 annotated pin
+activities and zero unannotated functional pins for each accepted sparse-event
+power report.  Reset activity is excluded.  Table~\ref{tab:controller-power-example}
+shows the exact four-core power values for the end-to-end OPT-125M execution
+as a representative example of the procedure.  Energy is not obtained by
+averaging these powers: for each core, its measured total power is multiplied
+by its own trace duration, and the resulting energies are summed.
+
+\begin{table}[t]
+  \centering
+  \caption{Workload-annotated controller power for end-to-end OPT-125M.}
+  \label{tab:controller-power-example}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Core & Internal & Switching & Leakage & Total \\
+         & \multicolumn{4}{c}{$(\mu\mathrm{W})$} \\
+    \midrule
+    0 & 37.8856 & 4.8548 & 0.4335 & 43.1739 \\
+    1 & 38.1459 & 5.0854 & 0.4297 & 43.6611 \\
+    2 & 37.8744 & 4.8502 & 0.4337 & 43.1583 \\
+    3 & 38.1302 & 5.0742 & 0.4299 & 43.6342 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+These are synthesis-stage, zero-delay activity results.  They include mapped
+cell internal, switching, and leakage power, including the explicit clock
+gates and local buffers, but exclude routed-interconnect capacitance,
+post-route clock-tree effects, and delay-dependent glitches.  Consequently,
+they are not signoff-quality post-layout power estimates.
+
+\subsection{HSPICE SA and Header-Switch Characterization}
+\label{sec:hspice-characterization}
+
+Standard-cell timing and power analysis do not model the virtual-supply rail
+collapse, wake-up inrush, or transition energy of a power-gated domain.  We
+therefore characterize the connected SA load with Synopsys HSPICE using the
+ASAP7 TT transistor model at 0.7~V and 25$^{\circ}$C.  The connected 1$\times$1
+test vehicle is the mapped two-stage weight-stationary PE netlist containing
+2,225 standard-cell instances.  ASAP7 xAct3D-extracted RVT cell subcircuits
+provide the logic load.  The power switch is modeled as a lumped parallel bank
+of RVT PMOS headers; each unit device has $W=81$~nm, $L=20$~nm, and three fins.
+
+The characterized boundary is deliberately narrow.  Before sleep, the PE is
+drained to a reset-zero state, its clock is stopped low, and its top-level
+inputs are clamped low.  The PE state is non-retentive.  The model excludes
+output-isolation cells, a physical sleep-driver implementation, distributed
+header placement, and placed power-grid parasitics.  The sleep command uses a
+50-ps slew in the connected-block characterization, and control-source energy
+is included explicitly in the event energy.
+
+Unit-header DC measurements first relate average active current to candidate
+virtual-rail-drop targets.  For a candidate drop $d$, the number of parallel
+devices is
+\begin{equation}
+  M(d)=\left\lceil\frac{P_{\mathrm{active}}/V_{DD}}
+  {I_{\mathrm{unit}}(d)}\right\rceil .
+  \label{eq:header-sizing}
+\end{equation}
+The measured unit currents and resulting 1$\times$1 candidates are listed in
+Table~\ref{tab:header-sizing-sweep}.  This calculation uses average active
+current; it is not a worst-case instantaneous-droop or electromigration
+signoff analysis.
+
+\begin{table}[t]
+  \centering
+  \caption{Current-derived PMOS-header sizing points.}
+  \label{tab:header-sizing-sweep}
+  \begin{tabular}{rrr}
+    \toprule
+    Drop target (\%) & Unit ON current ($\mu$A) & Multiplicity \\
+    \midrule
+    10.0 & 24.8138 & 44 \\
+     7.5 & 19.0019 & 57 \\
+     5.0 & 12.9062 & 83 \\
+     2.5 &  6.5601 & 164 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+At the 5\% current-derived point ($M=83$), the directly connected 1$\times$1
+zero-state experiment measures 7.2927~$\mu$s from the sleep-control 50\%
+crossing until the virtual rail falls through 10\% of $V_{DD}$, and
+477.365~ps from the wake-control 50\% crossing until the rail rises through
+90\% of $V_{DD}$.  The measured steady ON and OFF powers are 352.652~nW and
+3.8979~nW, respectively.  These measurements characterize that sizing point;
+they are not reused as the transition parameters of a differently sized
+header.
+
+The final workload energy calculation uses a separate directly simulated
+duration sweep with an $M=300$ equivalent header per 1$\times$1 PE.  The
+retained artifact establishes that this is the evaluated header size, but it
+does not contain a derivation showing that $M=300$ is an unconstrained optimum
+or a numerical worst-case active-droop guarantee.  We therefore treat
+$M=300$ as an explicit sizing assumption and do not claim it is optimal.
+
+For the $M=300$ sweep, the directly measured ON reference is
+351.8253~nW/PE and the steady OFF power is 14.0768~nW/PE, a 95.9989\%
+steady-state reduction.  Fifteen sleep-plateau durations from 5~ns to
+15~$\mu$s are simulated.  For each duration, the event cost is the sum of
+energy drawn from $V_{DD}$ and the absolute energy at the ideal sleep-control
+source.  Selected measured points are shown in
+Table~\ref{tab:m300-duration-sweep}.
+
+\begin{table}[t]
+  \centering
+  \caption{Selected points from the direct $M=300$ duration sweep.}
+  \label{tab:m300-duration-sweep}
+  \begin{tabular}{rrr}
+    \toprule
+    Sleep plateau & $V_{DD}$ energy & Control energy \\
+    (ns) & (fJ/PE) & (fJ/PE) \\
+    \midrule
+       5 &   3.4506 & 13.9238 \\
+      50 &  15.5239 & 13.9441 \\
+     150 &  42.2864 & 13.9859 \\
+     175 &  48.2865 & 13.9975 \\
+     500 & 131.1477 & 14.2638 \\
+    1,000 & 249.8182 & 14.5916 \\
+   15,000 & 2,395.7000 & 19.6069 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The electrical break-even duration is evaluated against leaving the PE ON
+for the requested sleep plateau plus the measured 5.1-ns recovery window.  If
+$T$ is the plateau duration, the per-PE gross benefit is
+\begin{equation}
+  E_{\mathrm{save}}(T)=P_{\mathrm{ON}}(T+5.1\,\mathrm{ns})
+  -\left[E_{VDD}(T)+E_{\mathrm{ctrl}}(T)\right].
+  \label{eq:hspice-break-even}
+\end{equation}
+The sign change lies between the directly simulated 150- and 175-ns points;
+linear interpolation gives 165.3~ns.  At 1~GHz, the RTL conservatively rounds
+this value upward to 166 cycles.  The additional one-cycle wake guard and
+three certificate-pipeline cycles are controller-safety margins and are not
+part of the 165.3-ns electrical break-even measurement.
+
+\subsection{Connected-Block Validation and 128$\times$128 Scaling}
+\label{sec:sa-scaling}
+
+We test small-block scaling using directly connected 1$\times$1 and
+4$\times$4 mapped arrays under the same ASAP7 TT device models.  The mapped
+loads contain 2,225 and 33,858 standard-cell instances, respectively.  At the
+documented $M=83$-per-PE sizing point, the 4$\times$4 header multiplicity is
+1,326.  Table~\ref{tab:connected-scaling} compares the directly measured
+ratios with the 16$\times$ PE-count ratio.
+
+\begin{table}[t]
+  \centering
+  \caption{Direct 1$\times$1-to-4$\times$4 connected-block scaling.}
+  \label{tab:connected-scaling}
+  \begin{tabular}{lr}
+    \toprule
+    Metric & Measured 4$\times$4/1$\times$1 ratio \\
+    \midrule
+    Steady OFF power & 15.8568 \\
+    Peak wake current & 15.7808 \\
+    Entry total energy & 16.6646 \\
+    Wake total energy & 14.9319 \\
+    Entry latency & 1.04414 \\
+    Wake latency & 0.93590 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The near-16$\times$ power, current, and transition-energy ratios support a
+linear per-PE energy model for the studied connected blocks; the latency
+ratios show that latency is not multiplied by PE count.  The retained final
+energy artifact also records direct 1$\times$1/4$\times$4 validation of the
+$M=300$-per-PE droop assumption, but it does not preserve numerical 4$\times$4
+$M=300$ measurements.  We therefore use the $M=300$ duration curve for energy
+calculation while avoiding a quantitative full-array droop claim.
+
+For workload evaluation, per-PE ON power, OFF power, and duration-dependent
+event energy are multiplied by 16,384, the PE count of one 128$\times$128
+array.  This is a linear scaling assumption:
+\begin{equation}
+  E_{128\times128}(T)=16{,}384\,E_{1\times1}(T).
+  \label{eq:per-pe-energy-scaling}
+\end{equation}
+Because both the ON reference and event energy use the same factor, the
+per-PE break-even duration is retained.  This extrapolation excludes
+distributed power-grid resistance, header placement, isolation cells,
+clock-control logic, architectural reset or weight-reload energy, and
+full-array inrush interaction.
+
+Controller area uses a separate structural extrapolation from synthesized
+16$\times$16 and 32$\times$32 instances of the same two-stage PE RTL.  The
+measured cell counts are 533,954 and 2,127,660, while the measured areas are
+59,614.1937 and 237,764.4435~$\mu\mathrm{m}^{2}$.  Relative to four copies of
+the 16$\times$16 design, the 32$\times$32 cell count and area differ by
+$-0.3819$\% and $-0.2903$\%, respectively.  With PE count as the independent
+variable, the frozen two-point extrapolation is
+\begin{equation}
+  Y_{128}=Y_{32}+\frac{16{,}384-1{,}024}{1{,}024-256}
+  (Y_{32}-Y_{16})=21Y_{32}-20Y_{16}.
+  \label{eq:structural-extrapolation}
+\end{equation}
+It yields 34,001,780 cells and 3.800769~mm$^{2}$ for a 128$\times$128 array.
+These are extrapolated synthesis-stage values, not a measured full-array
+place-and-route result.  A full 128$\times$128 implementation would be needed
+to quantify routed timing, congestion, clock distribution, PDN droop, and
+physical power-switch overhead.

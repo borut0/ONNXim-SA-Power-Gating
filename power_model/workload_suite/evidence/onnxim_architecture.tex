@@ -1,0 +1,124 @@
+% Required package: \usepackage{booktabs}
+\subsection{Baseline NPU Architecture and Simulation Flow}
+\label{sec:onnxim-architecture}
+
+We evaluate the proposed mechanism in ONNXim using the weight-stationary
+configuration summarized in Table~\ref{tab:baseline-configuration}. The
+simulated NPU contains four homogeneous cores clocked at 1~GHz. Each core has
+a $128\times128$ weight-stationary systolic array, a main scratchpad, and an
+accumulator scratchpad. Both scratchpads are double buffered. The configured
+main and accumulator capacities are 32~MiB and 4~MiB per core, respectively;
+consequently, each active buffer receives one half of the corresponding
+capacity. Operands use 2-byte precision, and memory accesses are divided into
+32-byte requests.
+
+\begin{table}[t]
+  \centering
+  \caption{Evaluated ONNXim configuration.}
+  \label{tab:baseline-configuration}
+  \begin{tabular}{ll}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    Number of cores & 4 \\
+    Core organization & Weight stationary \\
+    SA dimensions per core & $128\times128$ \\
+    Core frequency & 1~GHz \\
+    Main scratchpad per core & 32~MiB, double buffered \\
+    Accumulator scratchpad per core & 4~MiB, double buffered \\
+    Operand precision & 2~bytes \\
+    Memory-request granularity & 32~bytes \\
+    Scheduler & Simple \\
+    Interconnect model & BookSim2, 1~GHz \\
+    Injection ports per core & 16 \\
+    DRAM model & Ramulator2 HBM2, 1.2~GHz \\
+    DRAM channels & 16 \\
+    Tensor layout & NHWC \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection{Operation Tiling and Instruction Generation}
+
+ONNXim first lowers each supported model operation into one or more tiles
+according to the operation shape, the selected mapping, the $128\times128$
+array dimensions, and scratchpad-capacity constraints. A tile contains an
+ordered deque of instructions rather than a single atomic operation. The
+instruction set includes memory transfers (\texttt{MOVIN} and
+\texttt{MOVOUT}), SA operations (\texttt{GEMM\_PRELOAD} and
+\texttt{GEMM}), and non-SA operations executed by the remaining modeled
+compute path.
+
+For weight-stationary matrix multiplication, instruction generation first
+creates the required \texttt{MOVIN} instructions for weights, activations,
+and, when present, bias data. It then emits SA instructions followed by the
+required output transfer. A \texttt{GEMM\_PRELOAD} instruction loads a new
+weight tile into the array and performs the associated matrix multiplication;
+a subsequent \texttt{GEMM} can reuse the resident weights. Thus, only
+\texttt{GEMM\_PRELOAD} and \texttt{GEMM} intervals are classified as SA
+execution in this study.
+
+\subsubsection{Tile Scheduling and Core Admission}
+
+The evaluated configuration uses ONNXim's simple scheduler. When a layer
+becomes executable, its tiles enter the scheduler's global executable queue.
+Tiles without a preassigned core are distributed across the four cores in
+round-robin order and placed in a per-core executable-tile queue. Layer
+barriers prevent successor work from passing a layer whose launched tiles
+have not finished.
+
+On every core cycle, the simulator first returns completed tiles to the
+scheduler and then attempts to admit a new tile. A core accepts a tile only
+when it has fewer than two resident tiles; this is the implemented tile-level
+double-buffering limit. Admission selects the front tile of the corresponding
+per-core scheduler queue. On admission, the core assigns the tile to the
+alternate scratchpad and accumulator-buffer identifiers and flushes the newly
+selected main-scratchpad buffer. The baseline scheduler, admission order, and
+tile mapping are unchanged by our characterization instrumentation.
+
+\subsubsection{Core Queues and Instruction Flow}
+
+Each resident tile retains its ordered instruction deque. During a core
+cycle, the core examines resident tiles in round-robin order and issues at
+most one instruction successfully. A successfully issued instruction is
+removed from its tile and routed according to its opcode:
+\begin{itemize}
+  \item \texttt{MOVIN} enters the load-instruction queue;
+  \item \texttt{MOVOUT} enters the store-instruction queue; and
+  \item an execution instruction enters the single-entry execution queue
+        after its source operands become valid.
+\end{itemize}
+The execution queue subsequently dispatches SA instructions to the SA compute
+pipeline and other supported compute instructions to their modeled execution
+path. The core marks a tile complete only after its instruction deque is empty
+and its final issued instruction has completed.
+
+A load instruction allocates an entry in the selected scratchpad buffer and
+is decomposed into 32-byte memory requests. These requests enter the core's
+FIFO request queue and then traverse BookSim2 to the appropriate HBM2 channel
+modeled by Ramulator2. Read requests remain in an outstanding-access table
+after leaving the core FIFO. Returned responses traverse the interconnect back
+to the originating core and decrement the corresponding scratchpad entry's
+pending-memory count. The entry becomes valid only after every required
+response has returned. Consequently, an execution instruction can be blocked
+either because a required request has not yet left the core FIFO or because
+the request has left the FIFO but its response has not yet arrived. This
+distinction is later used by the causal idle-time predictor.
+
+\subsubsection{Non-Intrusive Instrumentation}
+
+We add aggregate counters at existing state-transition points rather than
+introducing new simulated pipeline stages. Per-core counters record SA-active
+and SA-idle cycles, request-FIFO occupancy, and mutually exclusive execution
+attribution. The interconnect records demand-active and demand-idle cycles,
+and the DRAM wrapper records accepted and completed demand transactions,
+channel occupancy, and transferred bytes. A memory-stage profiler accumulates
+request counts and latency sums for the core queue, core-to-memory
+interconnect, DRAM, and memory-to-core interconnect stages.
+
+These counters are read-only with respect to modeled execution: they do not
+change tile generation, core assignment, instruction order, operand
+readiness, request routing, or completion timing. The vector-unit activity
+counter is excluded from this paper because its current simulator behavior is
+suspected to be incorrect. The SA, FIFO, NoC, DRAM, and request-flow counters
+used in our results are retained independently of that excluded metric.

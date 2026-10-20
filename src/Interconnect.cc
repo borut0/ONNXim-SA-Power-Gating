@@ -19,9 +19,7 @@ bool component_characterization_enabled() {
 }  // namespace
 
 void Interconnect::record_packet_injected() {
-  if (!_component_characterization) {
-    return;
-  }
+  _packet_activity_since_last_cycle = true;
   _outstanding_packets++;
   _injected_packets++;
   _peak_outstanding_packets =
@@ -29,40 +27,62 @@ void Interconnect::record_packet_injected() {
 }
 
 void Interconnect::record_packet_delivered() {
-  if (!_component_characterization) {
-    return;
-  }
+  _packet_activity_since_last_cycle = true;
   assert(_outstanding_packets > 0);
   _outstanding_packets--;
   _delivered_packets++;
 }
 
-void Interconnect::record_activity_cycle() {
-  if (_component_characterization && _outstanding_packets != 0) {
-    _demand_active_cycles++;
+void Interconnect::record_quiescence_cycle(
+    const ModelQuiescenceStatus& before,
+    const ModelQuiescenceStatus& after) {
+  _quiescence_sampled_cycles++;
+  if (!_packet_activity_since_last_cycle &&
+      before.outstanding_packets_zero &&
+      after.outstanding_packets_zero) {
+    _zero_outstanding_boundary_cycles++;
   }
+  if (!before.observable || !after.observable) {
+    _quiescence_available = false;
+  } else if (!_packet_activity_since_last_cycle &&
+             before.quiescent() && after.quiescent()) {
+    _modeled_quiescent_cycles++;
+  }
+  _packet_activity_since_last_cycle = false;
 }
 
 void Interconnect::print_component_characterization() const {
-  const uint64_t idle_cycles = _cycles - _demand_active_cycles;
-  const double active_percent =
-      _cycles == 0
-          ? 0.0
-          : 100.0 * static_cast<double>(_demand_active_cycles) /
-                static_cast<double>(_cycles);
-  json record{{"version", 1},
+  const bool available = _quiescence_available &&
+      _quiescence_sampled_cycles == _cycles;
+  json record{{"version", 2},
               {"icnt_cycles", _cycles},
-              {"demand_active_cycles", _demand_active_cycles},
-              {"demand_idle_cycles", idle_cycles},
-              {"demand_active_percent", active_percent},
-              {"demand_idle_percent", 100.0 - active_percent},
+              {"modeled_quiescence_available", available},
+              {"modeled_quiescent_cycles", nullptr},
+              {"modeled_active_cycles", nullptr},
+              {"modeled_quiescent_percent", nullptr},
               {"injected_packets", _injected_packets},
               {"delivered_packets", _delivered_packets},
               {"peak_outstanding_packets", _peak_outstanding_packets},
               {"outstanding_packets_at_end", _outstanding_packets},
+              {"zero_outstanding_boundary_cycles",
+               _zero_outstanding_boundary_cycles},
+              {"cycle_count_evidence_class", "measured"},
+              {"percentage_evidence_class", "derived"},
+              {"percentage_equation",
+               "100 * modeled_quiescent_cycles / icnt_cycles"},
+              {"measurement_scope", "simulator model state"},
               {"activity_semantics",
-               "at least one ONNXim memory packet is in flight from "
-               "injection through destination delivery"}};
+               "pre/post cycle model quiescence plus no injection or delivery "
+               "event during the sampled cycle; unsupported internals make "
+               "the result unavailable"}};
+  if (available) {
+    record["modeled_quiescent_cycles"] = _modeled_quiescent_cycles;
+    record["modeled_active_cycles"] = _cycles - _modeled_quiescent_cycles;
+    record["modeled_quiescent_percent"] =
+        _cycles == 0 ? 0.0 :
+        100.0 * static_cast<double>(_modeled_quiescent_cycles) /
+            static_cast<double>(_cycles);
+  }
   spdlog::info("COMPONENT_NOC {}", record.dump());
 }
 
@@ -90,7 +110,7 @@ bool SimpleInterconnect::running() {
 }
 
 void SimpleInterconnect::cycle() {
-  record_activity_cycle();
+  ModelQuiescenceStatus before = get_model_quiescence_status();
   for(int dest = 0; dest < _n_nodes; dest++) {
     int src_start = _rr_next_src[dest];
     bool pushed = false;
@@ -110,6 +130,30 @@ void SimpleInterconnect::cycle() {
     }
   }
   _cycles++;
+  ModelQuiescenceStatus after = get_model_quiescence_status();
+  record_quiescence_cycle(before, after);
+}
+
+Interconnect::ModelQuiescenceStatus
+SimpleInterconnect::get_model_quiescence_status() {
+  ModelQuiescenceStatus status;
+  status.observable = true;
+  status.outstanding_packets_zero = _outstanding_packets == 0;
+  status.modeled_buffers_empty = true;
+  for (const auto& sources : _in_buffers) {
+    for (const auto& queue : sources) {
+      if (!queue.empty()) status.modeled_buffers_empty = false;
+    }
+  }
+  for (const auto& queue : _out_buffers) {
+    if (!queue.empty()) status.modeled_buffers_empty = false;
+  }
+  for (bool busy : _busy_node) {
+    if (busy) status.modeled_buffers_empty = false;
+  }
+  // The simple model has no routers, VCs, links, or credits.
+  status.backend_quiescent = true;
+  return status;
 }
 
 void SimpleInterconnect::push(uint32_t src, uint32_t dest, MemoryAccess* request) {
@@ -166,9 +210,11 @@ bool Booksim2Interconnect::running() {
 }
 
 void Booksim2Interconnect::cycle() {
-  record_activity_cycle();
+  ModelQuiescenceStatus before = get_model_quiescence_status();
   _booksim->run();
   _cycles++;
+  ModelQuiescenceStatus after = get_model_quiescence_status();
+  record_quiescence_cycle(before, after);
 }
 
 void Booksim2Interconnect::push(uint32_t src, uint32_t dest, MemoryAccess* request) {
@@ -200,6 +246,26 @@ void Booksim2Interconnect::pop(uint32_t nid) {
 
 void Booksim2Interconnect::print_stats() {
   _booksim->print_stats();
+}
+
+Interconnect::ModelQuiescenceStatus
+Booksim2Interconnect::get_model_quiescence_status() {
+  booksim2::Interconnect::QuiescenceStatus backend =
+      _booksim->get_quiescence_status();
+  ModelQuiescenceStatus status;
+  status.observable = backend.observable;
+  status.outstanding_packets_zero = _outstanding_packets == 0;
+  status.modeled_buffers_empty =
+      backend.injection_queues_empty &&
+      backend.source_buffer_states_quiescent &&
+      backend.ejection_buffers_empty &&
+      backend.boundary_buffers_empty &&
+      backend.retired_flit_queues_empty &&
+      backend.retired_packet_heads_empty &&
+      backend.in_flight_flits_empty;
+  status.backend_quiescent = backend.routers_quiescent &&
+      backend.flit_channels_empty && backend.credit_channels_empty;
+  return status;
 }
 
 booksim2::Interconnect::Type Booksim2Interconnect::get_booksim_type(MemoryAccess* access) {

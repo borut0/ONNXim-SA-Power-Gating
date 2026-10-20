@@ -323,6 +323,23 @@ void ConvWS::initialize_instructions(Tile* tile, Mapping mapping) {
     }
   }
   /* Compute */
+  auto weight_block_id = [&](int m_offset, int m_count,
+                             int s_offset, int r_offset,
+                             int c_offset, int c_count) {
+    std::set<addr_type> addresses;
+    for (int m_iter = 0; m_iter < m_count; ++m_iter) {
+      for (int c_iter = 0; c_iter < c_count; ++c_iter) {
+        addresses.insert(
+            second_addr + make_weight_address(
+                s_offset, r_offset, m_offset + m_iter,
+                c_offset + c_iter, _weight_shape));
+      }
+    }
+    std::vector<addr_type> exact_addresses(addresses.begin(), addresses.end());
+    return intern_sa_weight_block(exact_addresses,
+                                  static_cast<uint32_t>(m_count),
+                                  static_cast<uint32_t>(c_count));
+  };
   int q_loop_size = loop_size;
   int p_loop_size = loop_size;
   if (_pool_fused) {
@@ -345,6 +362,9 @@ void ConvWS::initialize_instructions(Tile* tile, Mapping mapping) {
               weight_sp_base_addr + loop_size * loop_size * \
               (tile_idx * (mapping.tile_in_loop.S * mapping.tile_in_loop.R) + Ss * mapping.tile_in_loop.R + Rs);
           weight_sp_addr = _config.align_address(weight_sp_addr);
+          uint64_t block_id = weight_block_id(
+              tout_m_offset + Ms, m_loop, tout_s_offset + Ss,
+              tout_r_offset + Rs, tout_c_offset + Cs, c_loop);
 
           for (int Ns = 0; Ns < mapping.tile_in_loop.N; Ns++) {
             for (int Qs = 0; Qs < mapping.tile_in_loop.Q && Qs + tout_q_offset < mapping.total_loop.Q; Qs += q_loop_size) {
@@ -376,7 +396,9 @@ void ConvWS::initialize_instructions(Tile* tile, Mapping mapping) {
                                       act_sp_base_addr, weight_sp_addr},
                                   .tile_m = static_cast<unsigned int>(m_loop),
                                   .tile_k = static_cast<unsigned int>(c_loop),
-                                  .tile_n = static_cast<unsigned int>(compute_size)
+                                  .tile_n = static_cast<unsigned int>(compute_size),
+                                  .sa_weight_block_id = block_id,
+                                  .sa_weight_block_known = block_id != 0
                                   }));
                 } else {
                   //spdlog::info("GEMM m: {}, c: {}, compute: {}", m_loop, c_loop, compute_size);
@@ -389,7 +411,9 @@ void ConvWS::initialize_instructions(Tile* tile, Mapping mapping) {
                                       act_sp_base_addr, weight_sp_addr},
                                   .tile_m = static_cast<unsigned int>(m_loop),
                                   .tile_k = static_cast<unsigned int>(c_loop),
-                                  .tile_n = static_cast<unsigned int>(compute_size)
+                                  .tile_n = static_cast<unsigned int>(compute_size),
+                                  .sa_weight_block_id = block_id,
+                                  .sa_weight_block_known = block_id != 0
                                   }));
                 }
               }

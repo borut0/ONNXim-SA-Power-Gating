@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "created_date": "2026-09-22",
+  "scope": "ONNXim workload aggregates evaluated with the pinned ReGate PE-level artifact equations",
+  "simulator": {
+    "container": "happy_noether",
+    "repository_commit": "fb87ca44fc0d5e59cde5ae3d3f2dd2ab445eee67",
+    "binary": "/workspace/ONNXim/build/bin/Simulator",
+    "binary_sha256": "6951aa541e0d4b0464a5f278415294eebea8a836b0265b25e802ed7fc2fb2a2a",
+    "binary_built_after_instrumented_sources": true,
+    "configuration": "configs/systolic_ws_128x128_c4_simple_noc_tpuv4.json",
+    "configuration_sha256": "1cac119461e9c9a382adb31c727f9fc86cfd02205ed335b7aec8032a580a3eac",
+    "instrumented_source_sha256": {
+      "src/SystolicWS.cc": "9a6f7542a4b953d58de09c47c41ad30b37592d43b5cf8b2bce741565ef1aaf92",
+      "src/SystolicWS.h": "d0f1d7e286838b5b719207ec3e44af30f2880e06622b4046064681c2362750c6"
+    },
+    "launch_command": {
+      "evidence_class": "pending",
+      "note": "The exact shell command and environment were not embedded in either raw log. Version-4 SA_REGION_PROFILE records prove that the new profiler was enabled."
+    }
+  },
+  "reference_model": {
+    "evidence_class": "reference",
+    "paper": "ReGate: Enabling Power Gating in Neural Processing Units",
+    "artifact_commit": "004dbfccb90cfc0a61bb79bbee3a5770b4b3897b",
+    "artifact_file": "trace_util/llm_ops_generator/power_analysis_lib.py",
+    "artifact_source_sha256": "0174f85e4354f8ccb0f10c34b5c05ed0912179bda29f4087a240809c0baab800",
+    "configuration_scope": "HW/Full PE-level SA path",
+    "low_power_factor": 0.03,
+    "pe_power_on_off_delay_cycles": 1
+  },
+  "workloads": [
+    {
+      "name": "ResNet-18 batch 1",
+      "model_list": "example/models_list.json",
+      "model_list_sha256": "4de6ec8b7be5b5a89e5f786aa0e26e13354483cc53e0dab4687984be1b955e55",
+      "raw_log": {
+        "path": "power_model/workload_suite/logs/resnet18_regate_artifact_v4.log",
+        "sha256": "caf5711d0cd34d37fd4b74faf1191c5b902b4a434c3a210b064a8ba3bd9b173b",
+        "evidence_class": "measured"
+      },
+      "summary": {
+        "path": "power_model/workload_suite/summaries/resnet18_regate_artifact_v4_summary.json",
+        "sha256": "c701e9bb9231b770a08e00a0a460bd775937aaf96e791652268e94cb30f7fe98",
+        "evidence_class": "derived"
+      },
+      "result": {
+        "path": "power_model/workload_suite/summaries/resnet18_regate_artifact_v4_result.json",
+        "sha256": "3ad59415a1f8fa5b8763ac7426a89146a6946d026a5818f8e9e6ff840edc4f5c",
+        "evidence_class": "derived_from_measured_onnxim_and_reference_regate_inputs"
+      }
+    },
+    {
+      "name": "OPT-125M reduced 32/8 trace, one simulated layer",
+      "model_list": "example/opt_125m_reduced_32_8.json",
+      "model_list_sha256": "c66e83e84d5d62c0e414bb388a5143596f2293e16d3d8e1d5724fbf714fb8ef2",
+      "raw_log": {
+        "path": "power_model/workload_suite/logs/opt125m_reduced_32_8_regate_artifact_v4.log",
+        "sha256": "4068e263fd2b42538e653dc62ad771e1614567fdf2c75ad860ec50e7a763be6d",
+        "evidence_class": "measured"
+      },
+      "summary": {
+        "path": "power_model/workload_suite/summaries/opt125m_reduced_32_8_regate_artifact_v4_summary.json",
+        "sha256": "4b51f1319351db5e21bc3ec8d012393e919b41924ffd430b34a057800d4c11bd",
+        "evidence_class": "derived"
+      },
+      "result": {
+        "path": "power_model/workload_suite/summaries/opt125m_reduced_32_8_regate_artifact_v4_result.json",
+        "sha256": "f850f4909ad70ce8e80953802200b524ff02e8621218d4e0f4ab5a204ccf99ad",
+        "evidence_class": "derived_from_measured_onnxim_and_reference_regate_inputs"
+      }
+    }
+  ],
+  "limitations": [
+    "The public ReGate artifact evaluates each operator; these results apply the same equations to per-core workload aggregates.",
+    "The normalized energy values are ON-static-power-cycle equivalents, not measured Joules.",
+    "The results do not measure controller, switch, isolation, routing, or transition energy.",
+    "The OPT-125M run is a reduced trace with one simulated transformer layer, not a full 12-layer execution.",
+    "These results are not publication-ready circuit measurements."
+  ]
+}

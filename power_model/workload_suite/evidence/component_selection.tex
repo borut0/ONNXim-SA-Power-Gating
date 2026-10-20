@@ -1,0 +1,68 @@
+% Required package: \usepackage{booktabs}
+\subsection{Motivation for Systolic-Array Power Management}
+\label{sec:component-selection}
+
+To identify a suitable power-management target, we augmented ONNXim with
+cycle counters for the systolic array (SA), the core memory-request FIFO, the
+on-chip network (NoC), and DRAM. The counters are observational: they do not
+modify scheduling, instruction issue, or simulated execution timing. SA
+idleness denotes cycles in which the array executes no SA operation. NoC
+idleness denotes cycles with no demand packet in flight, while DRAM idleness
+denotes cycles in which all channels have no outstanding demand request.
+Therefore, the NoC and DRAM values represent demand occupancy rather than
+physical link, bank, or command-bus utilization.
+
+Table~\ref{tab:component-characterization} reports the measured idle-cycle
+fractions for each workload. The SA is idle for 44.64--75.36\% of execution
+across the evaluated suite. The opportunity persists across both CNN and
+transformer workloads rather than arising from a single model. In particular,
+the larger transformer configurations exhibit approximately 73--75\% SA
+idleness even though their NoC and DRAM demand-idle fractions are only
+6--15\%. Thus, the array frequently waits while the surrounding memory system
+remains occupied, motivating local SA power management rather than
+coarse-grained shutdown of the complete NPU or memory subsystem.
+
+\begin{table*}[t]
+  \centering
+  \caption{Measured idle-cycle fractions across the workload suite. Larger
+  OPT and LLaMA configurations use representative decoder-layer execution;
+  OPT-125M is evaluated end-to-end.}
+  \label{tab:component-characterization}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Workload & SA idle (\%) & Request FIFO empty (\%) &
+    NoC demand-idle (\%) & DRAM demand-idle (\%) \\
+    \midrule
+    AlexNet            & 75.36 & 62.25 & 54.00 & 54.04 \\
+    ResNet-18          & 53.64 & 98.89 & 94.49 & 94.65 \\
+    ResNet-34          & 60.68 & 98.84 & 93.94 & 94.12 \\
+    ResNet-50          & 63.63 & 95.54 & 81.59 & 82.04 \\
+    ResNet-101         & 68.18 & 95.83 & 80.24 & 80.86 \\
+    VGG-11             & 65.51 & 53.14 & 37.41 & 37.46 \\
+    VGG-16             & 63.78 & 59.70 & 48.43 & 48.48 \\
+    VGG-19             & 63.72 & 64.47 & 52.79 & 52.85 \\
+    Wide-ResNet-50-2   & 68.10 & 96.14 & 85.46 & 85.81 \\
+    GPT-2              & 44.64 & 62.27 & 34.05 & 34.21 \\
+    OPT-125M (full)    & 73.27 & 65.43 & 25.43 & 26.58 \\
+    OPT-1.3B           & 75.05 & 25.44 & 14.47 & 14.76 \\
+    OPT-2.7B           & 74.56 & 22.14 & 14.46 & 14.70 \\
+    OPT-6.7B           & 74.75 & 22.84 & 10.26 & 10.36 \\
+    OPT-66B            & 73.59 & 26.11 &  6.12 &  6.15 \\
+    LLaMA-3-8B         & 74.16 & 23.06 & 10.48 & 10.57 \\
+    \midrule
+    \textbf{Cycle-weighted aggregate}
+                       & \textbf{72.32} & \textbf{31.04} &
+                         \textbf{12.56} & \textbf{12.70} \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+Across all runs, the SA is idle for 649,866,804 of 898,576,188 observed
+core-cycles, corresponding to a cycle-weighted idle fraction of 72.32\%.
+By comparison, the cycle-weighted NoC and DRAM demand-idle fractions are
+12.56\% and 12.70\%, respectively. The SA therefore offers a large and
+workload-consistent local idle opportunity while remaining active for
+27.68\% of observed core-cycles. Based on this combination of frequent
+idleness, regular participation in useful matrix computation, and a clear
+local control boundary, we select the SA as the target of the proposed
+fine-grained power-management mechanism.

@@ -161,6 +161,16 @@ bool Operation::check_executable() {
 }
 
 std::deque<std::unique_ptr<Tile>>& Operation::get_tiles() { //TODO: fix the return _tiles to new_tile
+  // Common hand-off boundary after operation-specific tile construction,
+  // including Attention's internal tile splicing. Finalizing here performs
+  // exactly one O(N) software pass before core admission.
+  for (const std::unique_ptr<Tile>& tile : _tiles) {
+    if (!tile) {
+      throw std::logic_error(
+          "operation tile hand-off contains a moved-from/null tile");
+    }
+    tile->finalize_sa_metadata();
+  }
   return _tiles;
 }
 

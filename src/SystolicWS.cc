@@ -1,9 +1,15 @@
 #include "SystolicWS.h"
+#include "SaPeStateOpportunity.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <optional>
+#include <set>
+#include <sstream>
 #include <stdexcept>
 
 namespace {
@@ -60,13 +66,28 @@ SystolicWS::SystolicWS(uint32_t id, SimulationConfig config)
   _predictor_measure_enabled =
       predictor_measure != nullptr && predictor_measure[0] != '\0' &&
       std::string(predictor_measure) != "0";
+  const char* updated_predictor =
+      std::getenv("ONNXSIM_SA_UPDATED_PREDICTOR");
+  _updated_predictor_enabled =
+      updated_predictor != nullptr && updated_predictor[0] != '\0' &&
+      std::string(updated_predictor) != "0";
+  _predictor_measure_enabled =
+      _predictor_measure_enabled || _updated_predictor_enabled;
 
   const char* reason_measure =
       std::getenv("ONNXSIM_SA_RETENTION_REASON_MEASURE");
   _retention_reason_measure =
       reason_measure != nullptr && reason_measure[0] != '\0' &&
       std::string(reason_measure) != "0";
-  if (_retention_reason_measure && _config.core_freq > 0 &&
+
+  const char* retention_shadow =
+      std::getenv("ONNXSIM_SA_RETENTION_SHADOW");
+  _retention_shadow_enabled =
+      retention_shadow != nullptr && retention_shadow[0] != '\0' &&
+      std::string(retention_shadow) != "0";
+  if ((_retention_reason_measure || _retention_shadow_enabled ||
+       _predictor_measure_enabled || _updated_predictor_enabled) &&
+      _config.core_freq > 0 &&
       _config.icnt_freq > 0 &&
       _config.icnt_injection_ports_per_core > 0) {
     uint64_t core_period = 1000000 / _config.core_freq;
@@ -95,6 +116,13 @@ SystolicWS::SystolicWS(uint32_t id, SimulationConfig config)
       std::string(scheduler_unlock_measure) != "0";
   _scheduler_opportunity_measure =
       _scheduler_opportunity_measure || _scheduler_unlock_measure;
+
+  initialize_hybrid_policy();
+  initialize_sa_event_trace();
+  initialize_regate_functional_profile();
+  initialize_regate_two_bank_profile();
+  initialize_updated_regate_profile();
+  initialize_sa_region_profile();
 
   const char* trace_dir = std::getenv("ONNXSIM_SA_CONTROLLER_TRACE_DIR");
   if (trace_dir == nullptr || trace_dir[0] == '\0') {
@@ -133,6 +161,18 @@ SystolicWS::SystolicWS(uint32_t id, SimulationConfig config)
 }
 
 SystolicWS::~SystolicWS() {
+  emit_regate_functional_profile();
+  emit_regate_two_bank_profile();
+  emit_updated_regate_profile();
+  emit_sa_region_profile();
+  emit_hybrid_summary();
+  flush_instruction_stall();
+  if (_sa_event_trace.is_open()) {
+    write_sa_event(json{{"event", "TRACE_END"},
+                        {"cycle", _core_cycle},
+                        {"core_id", _id}});
+    _sa_event_trace.close();
+  }
   if (!_controller_trace.is_open()) {
     return;
   }
@@ -149,6 +189,22 @@ SystolicWS::~SystolicWS() {
 void SystolicWS::issue(std::unique_ptr<Tile> tile) {
   Tile* admitted_tile = tile.get();
   Core::issue(std::move(tile));
+
+  if (_sa_event_trace.is_open()) {
+    flush_instruction_stall();
+    write_sa_event(json{{"event", "TILE_ADMITTED"},
+                        {"cycle", _core_cycle},
+                        {"core_id", _id},
+                        {"tile_id", admitted_tile->measurement_tile_id},
+                        {"layer_id", admitted_tile->layer_id},
+                        {"fused_op_id", admitted_tile->fused_op_id},
+                        {"operation", admitted_tile->optype},
+                        {"skip", admitted_tile->skip},
+                        {"instruction_count",
+                         admitted_tile->instructions.size()},
+                        {"sa_descriptor_count",
+                         admitted_tile->sa_descriptors.size()}});
+  }
 
   if (_phase_measure_enabled && _phase_measure) {
     bool contains_gemm = false;
@@ -216,6 +272,7 @@ void SystolicWS::cycle() {
   /* EX instruction queue */
   if (!_ex_inst_queue.empty() && ex_ready) { // execution dependecy check
     std::unique_ptr<Instruction> front = std::move(_ex_inst_queue.front());
+    record_compute_operand_reads(*front);
     if (front->dest_addr >= ACCUM_SPAD_BASE) {
       if (_acc_spad.check_allocated(front->dest_addr, front->accum_spad_id)) {
         _acc_spad.count_up(front->dest_addr, front->accum_spad_id,
@@ -272,6 +329,13 @@ void SystolicWS::cycle() {
         }
       }
       front->finish_cycle = front->start_cycle + get_inst_compute_cycles(front);
+      record_sa_region_interval(*front);
+      if (_hybrid_parameters.enabled &&
+          front->opcode == Opcode::GEMM_PRELOAD) {
+        // The preload itself establishes the complete PE weight state before
+        // any later ordinary GEMM can consume it.
+        _hybrid_pe_state_valid = true;
+      }
       _compute_pipeline.push(std::move(front));
       _stat_systolic_inst_issue_count++;
     } else {  // vector unit compute
@@ -304,11 +368,22 @@ void SystolicWS::cycle() {
       _compute_pipeline.empty() ? Opcode::BAR
                                 : _compute_pipeline.front()->opcode;
 
+  if (_hybrid_parameters.enabled) {
+    update_hybrid_policy(is_compute_busy);
+  }
+
+  if (_sa_event_trace.is_open()) {
+    trace_sa_transition(is_compute_busy);
+  }
+
   if (_controller_trace.is_open()) {
     trace_controller_inputs(is_compute_busy);
   }
   if (_retention_reason_measure) {
     measure_retention_source_reasons(is_compute_busy);
+  }
+  if (_retention_shadow_enabled) {
+    update_retention_shadow(is_compute_busy);
   }
   if (_scheduler_opportunity_measure) {
     measure_scheduler_opportunity(is_compute_busy);
@@ -355,6 +430,9 @@ void SystolicWS::cycle() {
   }
 
   Core::cycle();
+  if (_sa_event_trace.is_open()) {
+    trace_instruction_flow_events();
+  }
   if (_phase_measure_enabled) {
     observe_phase_events();
   }
@@ -491,6 +569,638 @@ void SystolicWS::cycle() {
   if (_component_characterization) {
     attribute_core_cycle(attribution_category);
   }
+}
+
+void SystolicWS::initialize_sa_event_trace() {
+  const char* trace_dir = std::getenv("ONNXSIM_SA_EVENT_TRACE_DIR");
+  if (trace_dir == nullptr || trace_dir[0] == '\0') {
+    return;
+  }
+  std::filesystem::path directory(trace_dir);
+  std::filesystem::create_directories(directory);
+  std::filesystem::path trace_path =
+      directory / ("sa_events_core" + std::to_string(_id) + ".jsonl");
+  _sa_event_trace.open(trace_path, std::ios::out | std::ios::trunc);
+  if (!_sa_event_trace.is_open()) {
+    throw std::runtime_error("cannot open SA event trace: " +
+                             trace_path.string());
+  }
+  write_sa_event(json{{"event", "TRACE_START"},
+                      {"version", 1},
+                      {"cycle", _core_cycle},
+                      {"core_id", _id},
+                      {"semantics",
+                       "causal instruction/state events; repeated identical "
+                       "instruction stalls are run-length encoded"}});
+}
+
+void SystolicWS::write_sa_event(json event) {
+  if (!_sa_event_trace.is_open()) {
+    return;
+  }
+  _sa_event_trace << event.dump() << '\n';
+}
+
+const char* SystolicWS::instruction_block_reason_name(
+    InstructionBlockReason reason) const {
+  switch (reason) {
+    case InstructionBlockReason::NONE: return "NONE";
+    case InstructionBlockReason::MEMORY: return "MEMORY";
+    case InstructionBlockReason::DEPENDENCY: return "DEPENDENCY";
+    case InstructionBlockReason::EXECUTION_QUEUE_BUSY:
+      return "EXECUTION_QUEUE_BUSY";
+    case InstructionBlockReason::SA_PIPELINE_FULL:
+      return "SA_PIPELINE_FULL";
+    case InstructionBlockReason::VECTOR_BUSY: return "VECTOR_BUSY";
+    case InstructionBlockReason::POWER_STATE_WAKE:
+      return "POWER_STATE_WAKE";
+    case InstructionBlockReason::UNKNOWN: return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+
+void SystolicWS::flush_instruction_stall() {
+  if (!_pending_instruction_stall.active) {
+    return;
+  }
+  const InstructionFlowEvent& event = _pending_instruction_stall.event;
+  write_sa_event(json{
+      {"event", "INSTRUCTION_STALL"},
+      {"start_cycle", event.cycle},
+      {"end_cycle", _pending_instruction_stall.end_cycle},
+      {"occurrences", _pending_instruction_stall.occurrences},
+      {"core_id", _id},
+      {"tile_id", event.tile_id},
+      {"layer_id", event.layer_id},
+      {"fused_op_id", event.fused_op_id},
+      {"operation", event.operation},
+      {"instruction_ordinal", event.instruction_ordinal},
+      {"opcode", opcode_name(event.opcode)},
+      {"reason", instruction_block_reason_name(event.block_reason)},
+      {"next_sa_prefix", event.next_sa_prefix_before},
+      {"weight_block_known", event.weight_block_known},
+      {"weight_block_id", event.weight_block_id}});
+  _pending_instruction_stall = PendingInstructionStall{};
+}
+
+void SystolicWS::trace_instruction_flow_events() {
+  for (const InstructionFlowEvent& event :
+       _last_instruction_flow_events) {
+    if (!event.issued) {
+      bool same = _pending_instruction_stall.active &&
+          _pending_instruction_stall.event.tile_id == event.tile_id &&
+          _pending_instruction_stall.event.instruction_ordinal ==
+              event.instruction_ordinal &&
+          _pending_instruction_stall.event.opcode == event.opcode &&
+          _pending_instruction_stall.event.block_reason ==
+              event.block_reason &&
+          _pending_instruction_stall.end_cycle + 1 == event.cycle;
+      if (!same) {
+        flush_instruction_stall();
+        _pending_instruction_stall.active = true;
+        _pending_instruction_stall.event = event;
+        _pending_instruction_stall.occurrences = 0;
+      }
+      _pending_instruction_stall.end_cycle = event.cycle;
+      _pending_instruction_stall.occurrences++;
+      continue;
+    }
+
+    flush_instruction_stall();
+    write_sa_event(json{
+        {"event", "INSTRUCTION_ISSUED"},
+        {"cycle", event.cycle},
+        {"core_id", _id},
+        {"tile_id", event.tile_id},
+        {"layer_id", event.layer_id},
+        {"fused_op_id", event.fused_op_id},
+        {"operation", event.operation},
+        {"instruction_ordinal", event.instruction_ordinal},
+        {"opcode", opcode_name(event.opcode)},
+        {"previous_issued_tile_id", event.previous_issued_tile_id},
+        {"tile_switch", event.tile_switch},
+        {"next_sa_prefix_before", event.next_sa_prefix_before},
+        {"weight_block_known", event.weight_block_known},
+        {"weight_block_id", event.weight_block_id}});
+  }
+  for (uint64_t tile_id : _last_retired_tile_ids) {
+    flush_instruction_stall();
+    write_sa_event(json{{"event", "TILE_RETIRED"},
+                        {"cycle", _core_cycle},
+                        {"core_id", _id},
+                        {"tile_id", tile_id}});
+  }
+}
+
+void SystolicWS::trace_sa_transition(bool sa_active) {
+  if (sa_active && !_event_trace_previous_sa_active) {
+    flush_instruction_stall();
+    const Instruction* front = _compute_pipeline.empty()
+        ? nullptr : _compute_pipeline.front().get();
+    _event_trace_active_opcode = front ? front->opcode : Opcode::BAR;
+    _event_trace_active_tile_id = front ? front->measurement_tile_id : 0;
+    _event_trace_active_weight_block_id =
+        front ? front->sa_weight_block_id : 0;
+    _event_trace_active_weight_known =
+        front ? front->sa_weight_block_known : false;
+    write_sa_event(json{
+        {"event", "SA_START"},
+        {"cycle", _core_cycle},
+        {"core_id", _id},
+        {"tile_id", _event_trace_active_tile_id},
+        {"opcode", opcode_name(_event_trace_active_opcode)},
+        {"weight_block_known", _event_trace_active_weight_known},
+        {"weight_block_id", _event_trace_active_weight_block_id}});
+  } else if (!sa_active && _event_trace_previous_sa_active) {
+    flush_instruction_stall();
+    write_sa_event(json{
+        {"event", "SA_FINISH"},
+        {"cycle", _core_cycle},
+        {"core_id", _id},
+        {"tile_id", _event_trace_active_tile_id},
+        {"opcode", opcode_name(_event_trace_active_opcode)},
+        {"weight_block_known", _event_trace_active_weight_known},
+        {"weight_block_id", _event_trace_active_weight_block_id}});
+  }
+  _event_trace_previous_sa_active = sa_active;
+}
+
+const char* SystolicWS::hybrid_state_name(HybridSaState state) const {
+  switch (state) {
+    case HybridSaState::ON: return "ON";
+    case HybridSaState::RETENTION: return "RETENTION";
+    case HybridSaState::OFF: return "OFF";
+    case HybridSaState::COUNT: break;
+  }
+  return "UNKNOWN";
+}
+
+const SystolicWS::HybridStateParameters&
+SystolicWS::hybrid_state_parameters(HybridSaState state) const {
+  if (state == HybridSaState::RETENTION) {
+    return _hybrid_parameters.retention;
+  }
+  if (state == HybridSaState::OFF) {
+    return _hybrid_parameters.off;
+  }
+  throw std::logic_error("ON has no low-power-state parameters");
+}
+
+void SystolicWS::initialize_hybrid_policy() {
+  const char* path = std::getenv("ONNXSIM_SA_HYBRID_CONFIG");
+  if (path == nullptr || path[0] == '\0' || std::string(path) == "0") {
+    return;
+  }
+
+  std::ifstream input(path);
+  if (!input.is_open()) {
+    throw std::runtime_error("cannot open hybrid SA config: " +
+                             std::string(path));
+  }
+  json config;
+  input >> config;
+  if (!config.is_object() || !config.contains("version") ||
+      config.at("version").get<uint32_t>() != 1) {
+    throw std::runtime_error("hybrid SA config requires version 1");
+  }
+
+  auto get_nonnegative_cycles = [&](const json& object,
+                                    const char* key,
+                                    cycle_type fallback) {
+    if (!object.contains(key)) {
+      return fallback;
+    }
+    if (!object.at(key).is_number_unsigned() &&
+        !object.at(key).is_number_integer()) {
+      throw std::runtime_error(std::string("hybrid field must be an integer: ") +
+                               key);
+    }
+    int64_t value = object.at(key).get<int64_t>();
+    if (value < 0) {
+      throw std::runtime_error(std::string("hybrid field must be nonnegative: ") +
+                               key);
+    }
+    return static_cast<cycle_type>(value);
+  };
+  auto get_optional_nonnegative = [&](const json& object,
+                                      const char* key) -> std::optional<double> {
+    if (!object.contains(key) || object.at(key).is_null()) {
+      return std::nullopt;
+    }
+    if (!object.at(key).is_number()) {
+      throw std::runtime_error(std::string("hybrid field must be numeric: ") +
+                               key);
+    }
+    double value = object.at(key).get<double>();
+    if (value < 0.0) {
+      throw std::runtime_error(std::string("hybrid field must be nonnegative: ") +
+                               key);
+    }
+    return value;
+  };
+  auto parse_state = [&](const char* name) {
+    if (!config.contains(name) || !config.at(name).is_object()) {
+      throw std::runtime_error(std::string("hybrid config missing object: ") +
+                               name);
+    }
+    const json& object = config.at(name);
+    HybridStateParameters result;
+    result.enabled = object.value("enabled", false);
+    result.entry_latency_cycles =
+        get_nonnegative_cycles(object, "entry_latency_cycles", 0);
+    result.wake_latency_cycles =
+        get_nonnegative_cycles(object, "wake_latency_cycles", 0);
+    result.break_even_cycles =
+        get_nonnegative_cycles(object, "break_even_cycles", 0);
+    result.idle_power_w = get_optional_nonnegative(object, "idle_power_w");
+    result.entry_energy_j =
+        get_optional_nonnegative(object, "entry_energy_j");
+    result.wake_energy_j =
+        get_optional_nonnegative(object, "wake_energy_j");
+    return result;
+  };
+
+  std::string mode = config.value("mode", std::string("shadow"));
+  if (mode != "shadow" && mode != "closed_loop") {
+    throw std::runtime_error(
+        "hybrid SA mode must be 'shadow' or 'closed_loop'");
+  }
+  _hybrid_parameters.enabled = true;
+  _hybrid_parameters.closed_loop = mode == "closed_loop";
+  _hybrid_parameters.apply_break_even_filter =
+      config.value("apply_break_even_filter", false);
+  _hybrid_parameters.prefer_off_when_safe =
+      config.value("prefer_off_when_safe", true);
+  _hybrid_parameters.minimum_causal_bound_cycles =
+      get_nonnegative_cycles(config, "minimum_causal_bound_cycles", 1);
+  if (_hybrid_parameters.minimum_causal_bound_cycles == 0) {
+    throw std::runtime_error(
+        "minimum_causal_bound_cycles must be at least one");
+  }
+  _hybrid_parameters.on_idle_power_w =
+      get_optional_nonnegative(config, "on_idle_power_w");
+  _hybrid_parameters.controller_power_w =
+      get_optional_nonnegative(config, "controller_power_w");
+  _hybrid_parameters.retention = parse_state("retention");
+  _hybrid_parameters.off = parse_state("off");
+  _hybrid_parameters.source_path = path;
+  if (!_hybrid_parameters.retention.enabled &&
+      !_hybrid_parameters.off.enabled) {
+    throw std::runtime_error(
+        "hybrid SA config enables neither retention nor off");
+  }
+
+  auto state_energy_complete = [](const HybridStateParameters& state) {
+    return !state.enabled ||
+        (state.idle_power_w.has_value() &&
+         state.entry_energy_j.has_value() &&
+         state.wake_energy_j.has_value());
+  };
+  _hybrid_energy_complete =
+      _config.core_freq > 0 &&
+      _hybrid_parameters.on_idle_power_w.has_value() &&
+      _hybrid_parameters.controller_power_w.has_value() &&
+      state_energy_complete(_hybrid_parameters.retention) &&
+      state_energy_complete(_hybrid_parameters.off);
+}
+
+cycle_type SystolicWS::hybrid_required_bound(HybridSaState state) const {
+  const HybridStateParameters& parameters =
+      hybrid_state_parameters(state);
+  cycle_type required =
+      _hybrid_parameters.minimum_causal_bound_cycles;
+  required = MAX(required,
+                 parameters.entry_latency_cycles +
+                     parameters.wake_latency_cycles + 1);
+  if (_hybrid_parameters.apply_break_even_filter) {
+    required = MAX(required, parameters.break_even_cycles);
+  }
+  return required;
+}
+
+void SystolicWS::set_hybrid_state(HybridSaState state,
+                                  const char* reason) {
+  if (_hybrid_state == state) {
+    return;
+  }
+  HybridSaState previous = _hybrid_state;
+  _hybrid_state = state;
+  if (state == HybridSaState::OFF) {
+    _hybrid_pe_state_valid = false;
+  }
+  if (state == HybridSaState::RETENTION || state == HybridSaState::OFF) {
+    _hybrid_episode_count[static_cast<size_t>(state)]++;
+  }
+  write_sa_event(json{{"event", "POWER_STATE"},
+                      {"cycle", _core_cycle},
+                      {"core_id", _id},
+                      {"from", hybrid_state_name(previous)},
+                      {"to", hybrid_state_name(state)},
+                      {"reason", reason},
+                      {"deadline", _hybrid_deadline}});
+}
+
+void SystolicWS::begin_hybrid_entry(HybridSaState target,
+                                    cycle_type safe_deadline) {
+  assert(target == HybridSaState::RETENTION ||
+         target == HybridSaState::OFF);
+  const HybridStateParameters& parameters =
+      hybrid_state_parameters(target);
+  _hybrid_deadline = safe_deadline;
+  if (parameters.entry_energy_j.has_value()) {
+    _hybrid_transition_energy_j += *parameters.entry_energy_j;
+  }
+  if (parameters.entry_latency_cycles == 0) {
+    set_hybrid_state(target, "CAUSAL_BOUND");
+    return;
+  }
+  _hybrid_entry_in_progress = true;
+  _hybrid_entry_target = target;
+  _hybrid_entry_complete_cycle =
+      _core_cycle + parameters.entry_latency_cycles;
+  write_sa_event(json{{"event", "POWER_ENTRY_START"},
+                      {"cycle", _core_cycle},
+                      {"core_id", _id},
+                      {"target", hybrid_state_name(target)},
+                      {"complete_cycle", _hybrid_entry_complete_cycle},
+                      {"deadline", _hybrid_deadline}});
+}
+
+void SystolicWS::begin_hybrid_wake(const char* reason) {
+  if (_hybrid_state == HybridSaState::ON) {
+    if (_hybrid_entry_in_progress) {
+      _hybrid_entry_in_progress = false;
+      _hybrid_entry_cancel_count++;
+      write_sa_event(json{{"event", "POWER_ENTRY_CANCEL"},
+                          {"cycle", _core_cycle},
+                          {"core_id", _id},
+                          {"target", hybrid_state_name(_hybrid_entry_target)},
+                          {"reason", reason}});
+    }
+    return;
+  }
+  if (_hybrid_wake_in_progress) {
+    return;
+  }
+  HybridSaState source = _hybrid_state;
+  const HybridStateParameters& parameters =
+      hybrid_state_parameters(source);
+  if (parameters.wake_energy_j.has_value()) {
+    _hybrid_transition_energy_j += *parameters.wake_energy_j;
+  }
+  _hybrid_immediate_wake_count++;
+  if (parameters.wake_latency_cycles == 0) {
+    set_hybrid_state(HybridSaState::ON, reason);
+    _hybrid_deadline = 0;
+    return;
+  }
+  _hybrid_wake_in_progress = true;
+  _hybrid_wake_complete_cycle =
+      _core_cycle + parameters.wake_latency_cycles;
+  write_sa_event(json{{"event", "POWER_WAKE_START"},
+                      {"cycle", _core_cycle},
+                      {"core_id", _id},
+                      {"from", hybrid_state_name(source)},
+                      {"reason", reason},
+                      {"complete_cycle", _hybrid_wake_complete_cycle}});
+  // Wake-transition cycles are conservatively charged as ON rather than as
+  // useful low-power residency. The issue path remains blocked until the
+  // configured completion cycle.
+  set_hybrid_state(HybridSaState::ON, "WAKE_TRANSITION");
+}
+
+void SystolicWS::account_hybrid_cycle(bool sa_active) {
+  _hybrid_state_cycles[static_cast<size_t>(_hybrid_state)]++;
+  if (_config.core_freq == 0) {
+    return;
+  }
+  long double cycle_seconds =
+      1.0L / (static_cast<long double>(_config.core_freq) * 1.0e6L);
+  if (!sa_active && _hybrid_parameters.on_idle_power_w.has_value()) {
+    _hybrid_baseline_idle_energy_j +=
+        *_hybrid_parameters.on_idle_power_w * cycle_seconds;
+  }
+  if (_hybrid_parameters.controller_power_w.has_value()) {
+    _hybrid_controller_energy_j +=
+        *_hybrid_parameters.controller_power_w * cycle_seconds;
+  }
+  if (sa_active) {
+    return;
+  }
+  if (_hybrid_state == HybridSaState::ON) {
+    if (_hybrid_parameters.on_idle_power_w.has_value()) {
+      _hybrid_mode_energy_j +=
+          *_hybrid_parameters.on_idle_power_w * cycle_seconds;
+    }
+  } else {
+    const HybridStateParameters& parameters =
+        hybrid_state_parameters(_hybrid_state);
+    if (parameters.idle_power_w.has_value()) {
+      _hybrid_mode_energy_j += *parameters.idle_power_w * cycle_seconds;
+    }
+  }
+}
+
+void SystolicWS::update_hybrid_policy(bool sa_active) {
+  // Committed work is unsafe only for an OFF entry: OFF destroys the PE
+  // state and preload activity may already have started.  Retention preserves
+  // that state, so a future committed start may itself provide the causal
+  // wake deadline.  Applying the OFF restriction to retention unnecessarily
+  // discards causally bounded idle cycles.
+  bool committed_work_invalidates_entry =
+      _hybrid_entry_target == HybridSaState::OFF &&
+      (!_compute_pipeline.empty() || !_ex_inst_queue.empty());
+  if (_hybrid_entry_in_progress &&
+      (sa_active || _hybrid_wake_requested ||
+       committed_work_invalidates_entry)) {
+    begin_hybrid_wake("ENTRY_INVALIDATED");
+  }
+  if (_hybrid_entry_in_progress &&
+      _core_cycle >= _hybrid_entry_complete_cycle) {
+    HybridSaState target = _hybrid_entry_target;
+    _hybrid_entry_in_progress = false;
+    set_hybrid_state(target, "ENTRY_COMPLETE");
+  }
+  if (_hybrid_wake_in_progress &&
+      _core_cycle >= _hybrid_wake_complete_cycle) {
+    _hybrid_wake_in_progress = false;
+    set_hybrid_state(HybridSaState::ON, "WAKE_COMPLETE");
+    _hybrid_deadline = 0;
+  }
+
+  // A deadline denotes the first cycle in which SA use may occur.  Process a
+  // due wake before examining activity in that cycle; otherwise a zero-cycle
+  // wake is incorrectly reported as late when SA_START occurs exactly at the
+  // certified deadline.  Positive-latency wakes are still initiated early by
+  // the same guard in the idle path below.
+  if (_hybrid_state != HybridSaState::ON &&
+      !_hybrid_wake_in_progress && _hybrid_deadline != 0) {
+    cycle_type wake_latency =
+        hybrid_state_parameters(_hybrid_state).wake_latency_cycles;
+    if (_core_cycle + wake_latency >= _hybrid_deadline) {
+      begin_hybrid_wake("WAKE_GUARD");
+    }
+  }
+
+  if (sa_active) {
+    if (_hybrid_state != HybridSaState::ON ||
+        _hybrid_wake_in_progress) {
+      _hybrid_deadline_violation_count++;
+      _hybrid_wake_in_progress = false;
+      set_hybrid_state(HybridSaState::ON, "OBSERVED_SA_ACTIVE");
+    }
+    _hybrid_entry_in_progress = false;
+    _hybrid_wake_requested = false;
+    account_hybrid_cycle(true);
+    return;
+  }
+
+  if (_hybrid_wake_requested) {
+    begin_hybrid_wake("SA_ISSUE_REQUEST");
+    _hybrid_wake_requested = false;
+  }
+
+  PredictorSnapshot snapshot = compute_idle_predictor_snapshot();
+  cycle_type safe_horizon = snapshot.safe_horizon;
+  bool now1_cap_binding =
+      snapshot.future_cap_limited &&
+      snapshot.safe_horizon == _core_cycle + 1 &&
+      snapshot.future_tile_cap == _core_cycle + 1;
+  if (now1_cap_binding && !_scheduler_core_tile_waiting) {
+    cycle_type issue_drain_cap =
+        _core_cycle + _scheduler_global_issue_drain_bound;
+    safe_horizon = snapshot.visible
+        ? MIN(snapshot.visible_horizon, issue_drain_cap)
+        : issue_drain_cap;
+  }
+  cycle_type remaining = safe_horizon > _core_cycle
+      ? safe_horizon - _core_cycle : 0;
+
+  if (snapshot.unknown) {
+    _hybrid_unknown_bound_cycles++;
+  }
+
+  if (_hybrid_state != HybridSaState::ON) {
+    if (snapshot.unknown || remaining == 0) {
+      begin_hybrid_wake("BOUND_INVALID");
+    } else {
+      _hybrid_deadline = _hybrid_deadline == 0
+          ? safe_horizon : MIN(_hybrid_deadline, safe_horizon);
+      cycle_type wake_latency =
+          hybrid_state_parameters(_hybrid_state).wake_latency_cycles;
+      if (_core_cycle + wake_latency >= _hybrid_deadline) {
+        begin_hybrid_wake("WAKE_GUARD");
+      }
+    }
+    account_hybrid_cycle(false);
+    return;
+  }
+
+  // Retention and OFF intentionally have different entry rules.  A positive
+  // causal bound is sufficient for retention because PE state is preserved.
+  // OFF eligibility below remains guarded by retention_safe_preload, which
+  // requires empty committed structures and PRELOAD candidates for both
+  // resident tiles.
+  if (_hybrid_entry_in_progress || _hybrid_wake_in_progress ||
+      snapshot.unknown || remaining == 0) {
+    account_hybrid_cycle(false);
+    return;
+  }
+
+  bool off_eligible = _hybrid_parameters.off.enabled &&
+      snapshot.retention_safe_preload &&
+      remaining >= hybrid_required_bound(HybridSaState::OFF);
+  bool retention_eligible = _hybrid_parameters.retention.enabled &&
+      remaining >= hybrid_required_bound(HybridSaState::RETENTION);
+  if (_hybrid_parameters.off.enabled &&
+      !snapshot.retention_safe_preload) {
+    _hybrid_off_rejected_state_reuse++;
+  }
+
+  HybridSaState target = HybridSaState::ON;
+  if (off_eligible &&
+      (_hybrid_parameters.prefer_off_when_safe ||
+       !retention_eligible)) {
+    target = HybridSaState::OFF;
+  } else if (retention_eligible) {
+    target = HybridSaState::RETENTION;
+  } else if (off_eligible) {
+    target = HybridSaState::OFF;
+  } else {
+    _hybrid_insufficient_bound_cycles++;
+  }
+  if (target != HybridSaState::ON) {
+    begin_hybrid_entry(target, safe_horizon);
+  }
+  account_hybrid_cycle(false);
+}
+
+void SystolicWS::emit_hybrid_summary() {
+  if (!_hybrid_parameters.enabled || _hybrid_summary_emitted) {
+    return;
+  }
+  _hybrid_summary_emitted = true;
+  uint64_t low_power_cycles =
+      _hybrid_state_cycles[static_cast<size_t>(HybridSaState::RETENTION)] +
+      _hybrid_state_cycles[static_cast<size_t>(HybridSaState::OFF)];
+  long double actual_energy = _hybrid_mode_energy_j +
+      _hybrid_transition_energy_j + _hybrid_controller_energy_j;
+  long double net_savings =
+      _hybrid_baseline_idle_energy_j - actual_energy;
+  const json record{
+      {"version", 1},
+      {"core_id", _id},
+      {"configuration", _hybrid_parameters.source_path},
+      {"mode", _hybrid_parameters.closed_loop ? "closed_loop" : "shadow"},
+      {"control_path_modified", _hybrid_parameters.closed_loop},
+      {"core_cycles", _core_cycle},
+      {"on_cycles", _hybrid_state_cycles[
+          static_cast<size_t>(HybridSaState::ON)]},
+      {"retention_cycles", _hybrid_state_cycles[
+          static_cast<size_t>(HybridSaState::RETENTION)]},
+      {"off_cycles", _hybrid_state_cycles[
+          static_cast<size_t>(HybridSaState::OFF)]},
+      {"low_power_cycles", low_power_cycles},
+      {"retention_episodes", _hybrid_episode_count[
+          static_cast<size_t>(HybridSaState::RETENTION)]},
+      {"off_episodes", _hybrid_episode_count[
+          static_cast<size_t>(HybridSaState::OFF)]},
+      {"entry_cancellations", _hybrid_entry_cancel_count},
+      {"wake_events", _hybrid_immediate_wake_count},
+      {"causal_deadline_violations", _hybrid_deadline_violation_count},
+      {"wake_stall_cycles", _hybrid_wake_stall_cycles},
+      {"off_rejected_state_reuse_observations",
+       _hybrid_off_rejected_state_reuse},
+      {"unknown_bound_cycles", _hybrid_unknown_bound_cycles},
+      {"insufficient_bound_cycles", _hybrid_insufficient_bound_cycles},
+      {"energy_known", _hybrid_energy_complete},
+      {"baseline_on_idle_energy_j",
+       _hybrid_energy_complete
+           ? json(static_cast<double>(_hybrid_baseline_idle_energy_j))
+           : json(nullptr)},
+      {"mode_idle_energy_j",
+       _hybrid_energy_complete
+           ? json(static_cast<double>(_hybrid_mode_energy_j))
+           : json(nullptr)},
+      {"transition_energy_j",
+       _hybrid_energy_complete
+           ? json(static_cast<double>(_hybrid_transition_energy_j))
+           : json(nullptr)},
+      {"controller_energy_j",
+       _hybrid_energy_complete
+           ? json(static_cast<double>(_hybrid_controller_energy_j))
+           : json(nullptr)},
+      {"net_savings_j",
+       _hybrid_energy_complete
+           ? json(static_cast<double>(net_savings))
+           : json(nullptr)},
+      {"assumptions",
+       {{"technology_values_are_user_supplied", true},
+        {"break_even_filter_applied",
+         _hybrid_parameters.apply_break_even_filter},
+        {"off_requires_all_visible_resident_candidates_to_preload", true},
+        {"retention_preserves_ordinary_gemm_state", true}}}};
+  spdlog::info("SA_HYBRID_SUMMARY {}", record.dump());
 }
 
 bool SystolicWS::has_resident_gemm_candidate() const {
@@ -1023,19 +1733,14 @@ SystolicWS::ControllerDescriptor SystolicWS::controller_descriptor(
   descriptor[5] = MIN(static_cast<uint64_t>(tile->instructions.size()),
                       FIELD_MAX);
 
-  const Instruction* candidate = nullptr;
-  uint64_t prefix = 0;
-  for (const std::unique_ptr<Instruction>& inst : tile->instructions) {
-    if (inst->opcode == Opcode::GEMM ||
-        inst->opcode == Opcode::GEMM_PRELOAD) {
-      candidate = inst.get();
-      break;
-    }
-    prefix++;
-  }
+  const Instruction* candidate = tile->next_sa_instruction;
+  uint64_t prefix = tile->next_sa_prefix_count;
   if (candidate == nullptr) {
+    assert(!tile->next_sa_candidate_found);
     return descriptor;
   }
+  assert(tile->next_sa_candidate_found);
+  assert(candidate->opcode == tile->next_sa_opcode);
 
   descriptor[1] = 1;  // candidate_found
   descriptor[2] = candidate->opcode == Opcode::GEMM_PRELOAD;
@@ -1208,32 +1913,218 @@ void SystolicWS::trace_controller_inputs(bool sa_active) {
 SystolicWS::PredictorCandidate SystolicWS::predictor_tile_candidate(
     const Tile& tile) const {
   PredictorCandidate candidate;
-  size_t prefix_length = 0;
-
-  for (const std::unique_ptr<Instruction>& inst : tile.instructions) {
-    if (inst->opcode != Opcode::GEMM &&
-        inst->opcode != Opcode::GEMM_PRELOAD) {
-      prefix_length++;
-      continue;
-    }
-
-    candidate.found = true;
-    candidate.opcode = inst->opcode;
-    candidate.horizon = _core_cycle + prefix_length;
-    if (prefix_length == 0) {
-      bool fifo_certified = false;
-      bool unknown = false;
-      cycle_type fifo_horizon = predictor_fifo_horizon(
-          *inst, tile.spad_id, tile.accum_spad_id,
-          fifo_certified, unknown);
-      candidate.horizon = MAX(candidate.horizon, fifo_horizon);
-      candidate.fifo_certified = fifo_certified;
-      candidate.unknown = unknown;
-    }
+  if (!tile.next_sa_candidate_found) {
+    assert(tile.next_sa_instruction == nullptr);
     return candidate;
   }
 
+  assert(tile.next_sa_instruction != nullptr);
+  candidate.found = true;
+  candidate.opcode = tile.next_sa_opcode;
+  if (tile.next_sa_prefix_count >
+      std::numeric_limits<cycle_type>::max() - _core_cycle) {
+    candidate.unknown = true;
+    return candidate;
+  }
+  candidate.prefix_horizon = _core_cycle + tile.next_sa_prefix_count;
+  candidate.operand_horizon = _core_cycle;
+  candidate.resource_horizon = _core_cycle;
+  candidate.horizon = candidate.prefix_horizon;
+  if (_updated_predictor_enabled) {
+    if (tile.next_sa_descriptor_index >= tile.sa_descriptors.size()) {
+      candidate.unknown = true;
+      return candidate;
+    }
+    bool operand_certified = false;
+    bool operand_unknown = false;
+    candidate.operand_horizon = updated_predictor_operand_horizon(
+        tile, tile.sa_descriptors[tile.next_sa_descriptor_index],
+        operand_certified, operand_unknown);
+    if (!_compute_pipeline.empty()) {
+      // The native WS scheduler pipelines from the last committed wave's
+      // start, not from the front wave's finish.
+      const Instruction& back = *_compute_pipeline.back();
+      uint64_t offset = std::max<uint64_t>(back.compute_size, 4);
+      if (candidate.opcode == Opcode::GEMM_PRELOAD) {
+        offset = std::max<uint64_t>(
+            offset, _config.core_config[_id].core_height);
+      }
+      if (offset > std::numeric_limits<cycle_type>::max() -
+                       back.start_cycle) {
+        candidate.unknown = true;
+      } else {
+        candidate.resource_horizon = std::max(
+            _core_cycle, back.start_cycle + offset);
+      }
+    }
+    candidate.horizon = std::max(
+        {candidate.prefix_horizon, candidate.operand_horizon,
+         candidate.resource_horizon});
+    candidate.fifo_certified = operand_certified;
+    candidate.unknown = candidate.unknown || operand_unknown;
+    return candidate;
+  }
+  if (tile.next_sa_prefix_count == 0) {
+    bool fifo_certified = false;
+    bool unknown = false;
+    cycle_type fifo_horizon = predictor_fifo_horizon(
+        *tile.next_sa_instruction, tile.spad_id, tile.accum_spad_id,
+        fifo_certified, unknown);
+    candidate.horizon = MAX(candidate.horizon, fifo_horizon);
+    candidate.fifo_certified = fifo_certified;
+    candidate.unknown = unknown;
+  }
   return candidate;
+}
+
+cycle_type SystolicWS::updated_predictor_operand_horizon(
+    const Tile& tile, const SaInstructionDescriptor& descriptor,
+    bool& certified, bool& unknown) const {
+  certified = false;
+  unknown = false;
+  cycle_type horizon = _core_cycle;
+  if (descriptor.instruction == nullptr || !_core_queue_tickets_exact ||
+      !tile.issued_planned_memory_requests_valid) {
+    unknown = true;
+    return horizon;
+  }
+
+  auto extend = [&](uint64_t left, uint64_t right,
+                    cycle_type& result) {
+    if (right > std::numeric_limits<cycle_type>::max() - left) {
+      unknown = true;
+      return false;
+    }
+    result = left + right;
+    return true;
+  };
+  auto injection_delay = [&](uint64_t position,
+                             cycle_type& delay) {
+    const uint64_t ports = _config.icnt_injection_ports_per_core;
+    if (position == 0 || ports == 0 || _config.core_freq == 0 ||
+        _config.icnt_freq == 0) {
+      unknown = true;
+      return false;
+    }
+    const uint64_t core_period = 1000000 / _config.core_freq;
+    const uint64_t icnt_period = 1000000 / _config.icnt_freq;
+    if (core_period == 0 || icnt_period == 0) {
+      unknown = true;
+      return false;
+    }
+    const uint64_t events = 1 + (position - 1) / ports;
+    const unsigned __int128 scaled =
+        static_cast<unsigned __int128>(events - 1) * icnt_period;
+    const unsigned __int128 cycles = scaled / core_period;
+    if (cycles > std::numeric_limits<cycle_type>::max()) {
+      unknown = true;
+      return false;
+    }
+    delay = static_cast<cycle_type>(cycles);
+    return true;
+  };
+
+  const Instruction& inst = *descriptor.instruction;
+  std::set<addr_type> seen;
+  const size_t current_ordinal = tile.instructions.empty()
+      ? descriptor.instruction_ordinal
+      : tile.instructions.front()->tile_instruction_ordinal;
+  for (addr_type address : inst.src_addrs) {
+    if (!seen.insert(address).second) {
+      continue;
+    }
+    const bool accum = inst.src_from_accum &&
+                       address >= ACCUM_SPAD_BASE;
+    const int buffer_id = accum ? tile.accum_spad_id : tile.spad_id;
+    const Sram& buffer = accum ? _acc_spad : _spad;
+    const Sram::EntryState state =
+        buffer.get_entry_state(address, buffer_id);
+    if (state.allocated && state.valid) {
+      continue;
+    }
+    if (state.allocated) {
+      if (state.pending_compute_count != 0) {
+        unknown = true;
+      }
+      if (state.pending_memory_count != 0) {
+        if (_response_drain_ports_per_core_cycle_bound == 0) {
+          unknown = true;
+        } else {
+          const cycle_type response_cycles =
+              (state.pending_memory_count - 1) /
+              _response_drain_ports_per_core_cycle_bound;
+          cycle_type bound;
+          if (extend(_core_cycle, response_cycles, bound)) {
+            horizon = std::max(horizon, bound);
+            certified = true;
+          }
+        }
+        if (state.memory_tail_core_queue_ticket >
+            _last_dequeued_core_queue_ticket) {
+          const uint64_t position =
+              state.memory_tail_core_queue_ticket -
+              _last_dequeued_core_queue_ticket;
+          cycle_type delay, bound;
+          if (injection_delay(position, delay) &&
+              extend(_core_cycle, delay, bound)) {
+            horizon = std::max(horizon, bound);
+            certified = true;
+          }
+        }
+      } else if (!state.valid && state.pending_compute_count == 0) {
+        unknown = true;
+      }
+      continue;
+    }
+
+    const auto planned = std::find_if(
+        descriptor.planned_memory_sources.begin(),
+        descriptor.planned_memory_sources.end(),
+        [address](const auto& source) {
+          return source.address == address;
+        });
+    if (planned == descriptor.planned_memory_sources.end() || accum) {
+      unknown = true;
+      continue;
+    }
+    if (planned->request_count == 0 ||
+        planned->cumulative_request_count_through_producer <
+            tile.issued_planned_memory_requests) {
+      unknown = true;
+      continue;
+    }
+    // Already-queued requests, the staged load, and every as-yet-unissued
+    // MOVIN through this producer precede its final required request.
+    uint64_t position = _request_queue.size();
+    if (!_ld_inst_queue.empty() &&
+        _ld_inst_queue.front()->opcode == Opcode::MOVIN) {
+      if (!extend(position, _ld_inst_queue.front()->src_addrs.size(),
+                  position)) continue;
+    }
+    const uint64_t remaining =
+        planned->cumulative_request_count_through_producer -
+        tile.issued_planned_memory_requests;
+    if (!extend(position, remaining, position)) continue;
+    cycle_type delay, fifo_bound;
+    if (injection_delay(position, delay) &&
+        extend(_core_cycle, delay, fifo_bound)) {
+      horizon = std::max(horizon, fifo_bound);
+      certified = true;
+    }
+    // A tile instruction issues in Core::cycle; the staged load is consumed
+    // by SystolicWS on the following cycle. Include both issue stages.
+    cycle_type issue_bound;
+    if (planned->producer_instruction_ordinal >= current_ordinal) {
+      const uint64_t ordinal_gap =
+          planned->producer_instruction_ordinal - current_ordinal;
+      if (extend(_core_cycle, ordinal_gap, issue_bound) &&
+          extend(issue_bound, 2, issue_bound)) {
+        horizon = std::max(horizon, issue_bound);
+        certified = true;
+      }
+    }
+  }
+  return horizon;
 }
 
 cycle_type SystolicWS::predictor_fifo_horizon(
@@ -1280,6 +2171,16 @@ cycle_type SystolicWS::predictor_fifo_horizon(
     }
 
     if (state.pending_memory_count > 0) {
+      bool have_response_bound =
+          _response_drain_ports_per_core_cycle_bound > 0;
+      if (have_response_bound) {
+        cycle_type response_cycles =
+            (state.pending_memory_count - 1) /
+            _response_drain_ports_per_core_cycle_bound;
+        horizon = MAX(horizon, _core_cycle + response_cycles);
+        certified = true;
+      }
+
       uint64_t tail_ticket = state.memory_tail_core_queue_ticket;
       if (tail_ticket > _last_dequeued_core_queue_ticket) {
         uint64_t position =
@@ -1305,7 +2206,11 @@ cycle_type SystolicWS::predictor_fifo_horizon(
             core_period;
         horizon = MAX(horizon, _core_cycle + safe_cycles);
         certified = true;
-      } else {
+      } else if (!have_response_bound) {
+        // Once the final required request has left the core FIFO, the
+        // outstanding-response count is the remaining causal certificate.
+        // It is unknown only when the evaluated configuration provides no
+        // conservative response-service bound.
         unknown = true;
       }
     }
@@ -1326,6 +2231,10 @@ cycle_type SystolicWS::predictor_future_tile_cap(
   // The scheduler has already attempted admission for this core cycle.
   // With a free resident slot, an unknown tile can be admitted next cycle.
   if (_tiles.size() < 2) {
+    if (_core_cycle == std::numeric_limits<cycle_type>::max()) {
+      unknown = true;
+      return _core_cycle;
+    }
     return _core_cycle + 1;
   }
   if (_tiles.size() != 2 || tile_candidates.size() != _tiles.size()) {
@@ -1336,8 +2245,12 @@ cycle_type SystolicWS::predictor_future_tile_cap(
   cycle_type cap = std::numeric_limits<cycle_type>::max();
   for (size_t i = 0; i < _tiles.size(); ++i) {
     size_t remaining = _tiles[i]->instructions.size();
-    cycle_type retirement_lower_bound =
-        _core_cycle + MAX(static_cast<size_t>(1), remaining);
+    const size_t steps = MAX(static_cast<size_t>(1), remaining);
+    if (steps > std::numeric_limits<cycle_type>::max() - _core_cycle) {
+      unknown = true;
+      return _core_cycle;
+    }
+    cycle_type retirement_lower_bound = _core_cycle + steps;
     if (tile_candidates[i].found) {
       retirement_lower_bound =
           MAX(retirement_lower_bound, tile_candidates[i].horizon);
@@ -1398,9 +2311,14 @@ SystolicWS::compute_idle_predictor_snapshot() const {
       _tiles.size() == 2 && tile_candidates.size() == 2;
   if (snapshot.retention_safe_preload) {
     for (const PredictorCandidate& candidate : tile_candidates) {
-      if (!candidate.found || candidate.opcode != Opcode::GEMM_PRELOAD) {
+      if (!candidate.found) {
+        // Even with two resident slots, retiring a tile without another
+        // known SA candidate can expose an unknown scheduler tile.
         snapshot.retention_safe_preload = false;
-        break;
+        continue;
+      }
+      if (candidate.opcode != Opcode::GEMM_PRELOAD) {
+        snapshot.retention_safe_preload = false;
       }
     }
   }
@@ -1427,6 +2345,133 @@ SystolicWS::compute_idle_predictor_snapshot() const {
     snapshot.unknown = true;
   }
   return snapshot;
+}
+
+void SystolicWS::close_retention_shadow_episode(bool right_censored) {
+  if (!_retention_shadow_active) {
+    return;
+  }
+  assert(_retention_shadow_current_episode_cycles > 0);
+  assert(_retention_shadow_entry_bound_cycles > 0);
+  cycle_type duration = static_cast<cycle_type>(
+      _retention_shadow_current_episode_cycles);
+  _retention_shadow_episode_count++;
+  _retention_shadow_longest_episode = MAX(
+      _retention_shadow_longest_episode, duration);
+  _retention_shadow_duration_histogram[duration]++;
+  _retention_shadow_entry_bound_histogram[
+      _retention_shadow_entry_bound_cycles]++;
+  if (right_censored) {
+    _retention_shadow_right_censored_episodes++;
+  }
+  for (size_t index = 0;
+       index < RETENTION_ENTRY_THRESHOLDS.size(); ++index) {
+    cycle_type threshold = RETENTION_ENTRY_THRESHOLDS[index];
+    if (_retention_shadow_entry_bound_cycles < threshold) {
+      continue;
+    }
+    _retention_shadow_threshold_episode_count[index]++;
+    _retention_shadow_threshold_cycle_count[index] += duration;
+    if (duration < threshold) {
+      _retention_shadow_threshold_early_exit_count[index]++;
+    }
+    if (right_censored) {
+      _retention_shadow_threshold_right_censored_count[index]++;
+    }
+  }
+  _retention_shadow_active = false;
+  _retention_shadow_wake_cycle = 0;
+  _retention_shadow_entry_bound_cycles = 0;
+  _retention_shadow_current_episode_cycles = 0;
+}
+
+void SystolicWS::update_retention_shadow(bool sa_active) {
+  // `sa_active` is derived from the real compute-pipeline start/finish state.
+  // It is therefore the confirmation boundary: retention is never entered
+  // during nominal or stalled SA execution.
+  if (sa_active) {
+    if (_retention_shadow_active) {
+      if (_core_cycle < _retention_shadow_wake_cycle) {
+        _retention_shadow_causal_deadline_violations++;
+      }
+      _retention_shadow_immediate_wake_events++;
+      close_retention_shadow_episode(false);
+    }
+    return;
+  }
+
+  _retention_shadow_sa_idle_cycles++;
+
+  if (_retention_shadow_active &&
+      _core_cycle >= _retention_shadow_wake_cycle) {
+    close_retention_shadow_episode(false);
+  }
+
+  PredictorSnapshot snapshot = compute_idle_predictor_snapshot();
+  cycle_type work_drain_horizon = snapshot.safe_horizon;
+  bool now1_cap_binding =
+      snapshot.future_cap_limited &&
+      snapshot.safe_horizon == _core_cycle + 1 &&
+      snapshot.future_tile_cap == _core_cycle + 1;
+  if (now1_cap_binding && !_scheduler_core_tile_waiting) {
+    cycle_type issue_drain_cap =
+        _core_cycle + _scheduler_global_issue_drain_bound;
+    work_drain_horizon = snapshot.visible
+        ? MIN(snapshot.visible_horizon, issue_drain_cap)
+        : issue_drain_cap;
+  }
+
+  cycle_type remaining = work_drain_horizon > _core_cycle
+      ? work_drain_horizon - _core_cycle
+      : 0;
+  // Unlike non-retentive OFF, retention preserves the PE state required by
+  // an ordinary GEMM.  Therefore eligibility depends on a positive causal
+  // next-use bound, not on both resident candidates being PRELOADs (or even
+  // already being visible).  `future_tile_cap` bounds an unknown admission.
+  bool eligible = !snapshot.unknown && remaining > 0;
+
+  if (_retention_shadow_active) {
+    if (!eligible) {
+      _retention_shadow_immediate_wake_events++;
+      close_retention_shadow_episode(false);
+      return;
+    }
+    // A fresh causal observation may shorten, but never extend, the frozen
+    // wake deadline selected at entry.
+    _retention_shadow_wake_cycle = MIN(
+        _retention_shadow_wake_cycle, _core_cycle + remaining);
+  } else if (eligible) {
+    _retention_shadow_active = true;
+    _retention_shadow_wake_cycle = _core_cycle + remaining;
+    _retention_shadow_entry_bound_cycles = remaining;
+    _retention_shadow_current_episode_cycles = 0;
+
+    bool any_candidate = false;
+    bool all_candidates_preload = true;
+    bool any_state_reuse = false;
+    for (const std::unique_ptr<Tile>& tile : _tiles) {
+      if (!tile->next_sa_candidate_found) {
+        continue;
+      }
+      any_candidate = true;
+      all_candidates_preload = all_candidates_preload &&
+          tile->next_sa_opcode == Opcode::GEMM_PRELOAD;
+      any_state_reuse = any_state_reuse ||
+          tile->next_sa_opcode == Opcode::GEMM;
+    }
+    if (any_state_reuse) {
+      _retention_shadow_reuse_episode_count++;
+    } else if (any_candidate && all_candidates_preload) {
+      _retention_shadow_preload_only_episode_count++;
+    } else {
+      _retention_shadow_unknown_future_episode_count++;
+    }
+  }
+
+  if (_retention_shadow_active) {
+    _retention_shadow_cycles++;
+    _retention_shadow_current_episode_cycles++;
+  }
 }
 
 void SystolicWS::measure_retention_source_reasons(bool sa_active) {
@@ -1875,7 +2920,25 @@ void SystolicWS::measure_scheduler_opportunity(bool sa_active) {
 }
 
 void SystolicWS::update_idle_predictor(bool sa_active) {
+  constexpr cycle_type kReferenceWholeSaWakeCycles = 10;
+  constexpr cycle_type kReferenceWholeSaBreakEvenCycles = 469;
   if (sa_active) {
+    if (_legacy_updated_regate_enabled) {
+      if (_reference_sa_logic_off) {
+        _reference_sa_logic_off_episodes.emplace_back(
+            _reference_sa_logic_off_start, _core_cycle);
+        _reference_sa_logic_off = false;
+        _reference_sa_logic_wake_ready =
+            _core_cycle + kReferenceWholeSaWakeCycles;
+      }
+      if (_reference_sa_logic_wake_ready > _core_cycle) {
+        ++_reference_sa_logic_late_wake_events;
+        _reference_sa_logic_max_late_wake_cycles = MAX(
+            _reference_sa_logic_max_late_wake_cycles,
+            _reference_sa_logic_wake_ready - _core_cycle);
+      }
+      _reference_sa_logic_wake_ready = 0;
+    }
     if (_predictor_sa_idle) {
       complete_idle_predictor_interval();
     }
@@ -2022,6 +3085,23 @@ void SystolicWS::update_idle_predictor(bool sa_active) {
       work_drain_horizon > _core_cycle
           ? work_drain_horizon - _core_cycle
           : 0;
+  if (_legacy_updated_regate_enabled) {
+    if (_reference_sa_logic_off) {
+      if (fresh_work_drain_remaining <= kReferenceWholeSaWakeCycles) {
+        _reference_sa_logic_off_episodes.emplace_back(
+            _reference_sa_logic_off_start, _core_cycle);
+        _reference_sa_logic_off = false;
+        _reference_sa_logic_wake_ready =
+            _core_cycle + kReferenceWholeSaWakeCycles;
+      }
+    } else if (_reference_sa_logic_wake_ready <= _core_cycle &&
+               fresh_work_drain_remaining >=
+                   kReferenceWholeSaBreakEvenCycles +
+                       kReferenceWholeSaWakeCycles) {
+      _reference_sa_logic_off = true;
+      _reference_sa_logic_off_start = _core_cycle;
+    }
+  }
   _pg_shadow_max_fresh_remaining =
       MAX(_pg_shadow_max_fresh_remaining, fresh_work_drain_remaining);
   if (snapshot.retention_safe_preload) {
@@ -2185,6 +3265,9 @@ void SystolicWS::complete_idle_predictor_interval() {
                 {"unknown_recomputations", _predictor_unknown_count},
                 {"pg_shadow_break_even_cycles",
                  POWER_GATE_BREAK_EVEN_CYCLES},
+                {"pg_shadow_threshold_provenance",
+                 "sensitivity assumption from a one-PE partial-collapse "
+                 "reference, not a calibrated full-SA two-bank break-even"},
                 {"pg_shadow_wake_guard_cycles",
                  POWER_GATE_WAKE_GUARD_CYCLES},
                 {"pg_shadow_entry_required_cycles",
@@ -2227,8 +3310,35 @@ bool SystolicWS::can_issue_compute(std::unique_ptr<Instruction>& inst)
         return false;
     }
 
-    if (inst->opcode == Opcode::GEMM ||
-        inst->opcode == Opcode::GEMM_PRELOAD)
+    const bool sa_instruction =
+        inst->opcode == Opcode::GEMM ||
+        inst->opcode == Opcode::GEMM_PRELOAD;
+    if (_hybrid_parameters.enabled && inst->opcode == Opcode::GEMM &&
+        !_hybrid_pe_state_valid) {
+      throw std::logic_error(
+          "ordinary GEMM reached issue after OFF destroyed PE state");
+    }
+    if (_hybrid_parameters.enabled &&
+        _hybrid_parameters.closed_loop && sa_instruction &&
+        (_hybrid_state != HybridSaState::ON ||
+         _hybrid_entry_in_progress || _hybrid_wake_in_progress)) {
+      if (_hybrid_state == HybridSaState::ON &&
+          _hybrid_entry_in_progress) {
+        begin_hybrid_wake("SA_ISSUE_DURING_ENTRY");
+      } else if (_hybrid_state != HybridSaState::ON) {
+        begin_hybrid_wake("SA_ISSUE_REQUEST");
+      }
+      if (_hybrid_state != HybridSaState::ON ||
+          _hybrid_wake_in_progress) {
+        _hybrid_wake_requested = true;
+        _hybrid_wake_stall_cycles++;
+        _last_compute_block_reason =
+            ComputeBlockReason::POWER_STATE_WAKE;
+        return false;
+      }
+    }
+
+    if (sa_instruction)
     {
         if (_compute_pipeline.size() >=
             _config.core_config[_id].core_height)
@@ -2249,6 +3359,22 @@ bool SystolicWS::can_issue_compute(std::unique_ptr<Instruction>& inst)
     }
 
     return true;
+}
+
+Core::InstructionBlockReason
+SystolicWS::specialized_compute_block_reason() const {
+  switch (_last_compute_block_reason) {
+    case ComputeBlockReason::PIPELINE_FULL:
+      return InstructionBlockReason::SA_PIPELINE_FULL;
+    case ComputeBlockReason::VECTOR_BUSY:
+      return InstructionBlockReason::VECTOR_BUSY;
+    case ComputeBlockReason::POWER_STATE_WAKE:
+      return InstructionBlockReason::POWER_STATE_WAKE;
+    case ComputeBlockReason::OPERAND_WAIT:
+    case ComputeBlockReason::NONE:
+      return InstructionBlockReason::UNKNOWN;
+  }
+  return InstructionBlockReason::UNKNOWN;
 }
 
 cycle_type SystolicWS::get_inst_compute_cycles(std::unique_ptr<Instruction>& inst) {
@@ -2296,12 +3422,1758 @@ cycle_type SystolicWS::get_vector_compute_cycles(std::unique_ptr<Instruction>& i
   return 0;
 }
 
+void SystolicWS::initialize_sa_region_profile() {
+  const char* enabled = std::getenv("ONNXSIM_SA_REGION_PROFILE");
+  _sa_region_profile_enabled =
+      enabled != nullptr && enabled[0] != '\0' &&
+      std::string(enabled) != "0";
+  if (!_sa_region_profile_enabled) {
+    return;
+  }
+
+  const uint32_t array_rows = _config.core_config[_id].core_height;
+  const uint32_t array_columns = _config.core_config[_id].core_width;
+  if (array_rows == 0 || array_columns == 0) {
+    throw std::runtime_error(
+        "SA region profiling requires nonzero array dimensions");
+  }
+
+  std::set<uint32_t> unique_sizes;
+  const char* requested = std::getenv("ONNXSIM_SA_REGION_SIZES");
+  if (requested == nullptr || requested[0] == '\0') {
+    unique_sizes = {8, 16, 32, 64, 128};
+  } else {
+    std::stringstream stream(requested);
+    std::string token;
+    while (std::getline(stream, token, ',')) {
+      token.erase(std::remove_if(token.begin(), token.end(),
+                                 [](unsigned char value) {
+                                   return std::isspace(value);
+                                 }),
+                  token.end());
+      if (token.empty()) {
+        throw std::runtime_error(
+            "ONNXSIM_SA_REGION_SIZES contains an empty item");
+      }
+      size_t parsed = 0;
+      unsigned long value = 0;
+      try {
+        value = std::stoul(token, &parsed);
+      } catch (const std::exception&) {
+        throw std::runtime_error(
+            "invalid ONNXSIM_SA_REGION_SIZES item: " + token);
+      }
+      if (parsed != token.size() || value == 0 ||
+          value > std::numeric_limits<uint32_t>::max()) {
+        throw std::runtime_error(
+            "invalid ONNXSIM_SA_REGION_SIZES item: " + token);
+      }
+      unique_sizes.insert(static_cast<uint32_t>(value));
+    }
+  }
+
+  const uint32_t maximum_dimension = MAX(array_rows, array_columns);
+  for (uint32_t size : unique_sizes) {
+    if (size <= maximum_dimension) {
+      _sa_region_sizes.push_back(size);
+    }
+  }
+  // Always include the whole-array granularity, including rectangular arrays.
+  if (unique_sizes.count(maximum_dimension) == 0) {
+    _sa_region_sizes.push_back(maximum_dimension);
+  }
+  std::sort(_sa_region_sizes.begin(), _sa_region_sizes.end());
+  _sa_region_sizes.erase(
+      std::unique(_sa_region_sizes.begin(), _sa_region_sizes.end()),
+      _sa_region_sizes.end());
+}
+
+void SystolicWS::initialize_regate_functional_profile() {
+  const char* enabled =
+      std::getenv("ONNXSIM_REGATE_FUNCTIONAL_PROFILE");
+  _regate_functional_enabled =
+      enabled != nullptr && enabled[0] != '\0' &&
+      std::string(enabled) != "0";
+  if (_regate_functional_enabled &&
+      (_config.core_config[_id].core_height == 0 ||
+       _config.core_config[_id].core_width == 0)) {
+    throw std::runtime_error(
+        "ReGate functional profiling requires nonzero array dimensions");
+  }
+}
+
+
+void SystolicWS::initialize_regate_two_bank_profile() {
+  const char* enabled =
+      std::getenv("ONNXSIM_REGATE_TWO_BANK_PROFILE");
+  _regate_two_bank_enabled =
+      enabled != nullptr && enabled[0] != '\0' &&
+      std::string(enabled) != "0";
+  if (_regate_two_bank_enabled &&
+      (_config.core_config[_id].core_height == 0 ||
+       _config.core_config[_id].core_width == 0)) {
+    throw std::runtime_error(
+        "two-bank ReGate profiling requires nonzero array dimensions");
+  }
+}
+
+void SystolicWS::initialize_updated_regate_profile() {
+  const char* enabled = std::getenv("ONNXSIM_REGATE_UPDATED_PROFILE");
+  _legacy_updated_regate_enabled =
+      enabled != nullptr && enabled[0] != '\0' &&
+      std::string(enabled) != "0";
+  const char* event_driven =
+      std::getenv("ONNXSIM_REGATE_EVENT_DRIVEN_PROFILE");
+  _event_driven_regate_enabled =
+      event_driven != nullptr && event_driven[0] != '\0' &&
+      std::string(event_driven) != "0";
+  _updated_regate_enabled =
+      _legacy_updated_regate_enabled || _event_driven_regate_enabled;
+  if (_legacy_updated_regate_enabled && !_updated_predictor_enabled) {
+    throw std::runtime_error(
+        "updated ReGate profile requires ONNXSIM_SA_UPDATED_PREDICTOR=1");
+  }
+  if (_updated_regate_enabled && _hybrid_parameters.enabled) {
+    throw std::runtime_error(
+        "updated ReGate profile cannot run with hybrid SA control, "
+        "including hybrid shadow mode, because hybrid state may affect "
+        "ordinary GEMM issue");
+  }
+  if (_updated_regate_enabled &&
+      (_config.core_config[_id].core_height == 0 ||
+       _config.core_config[_id].core_width == 0)) {
+    throw std::runtime_error(
+        "updated ReGate profiling requires nonzero array dimensions");
+  }
+}
+
+void SystolicWS::record_sa_region_interval(
+    const Instruction& instruction) {
+  if (!_sa_region_profile_enabled && !_regate_functional_enabled &&
+      !_regate_two_bank_enabled && !_updated_regate_enabled) {
+    return;
+  }
+  if (instruction.opcode != Opcode::GEMM &&
+      instruction.opcode != Opcode::GEMM_PRELOAD) {
+    throw std::logic_error(
+        "non-SA instruction passed to SA region profiler");
+  }
+  if (instruction.finish_cycle < instruction.start_cycle) {
+    throw std::logic_error("SA interval finishes before it starts");
+  }
+  _sa_region_intervals.push_back(SaRegionInterval{
+      .stream_id = instruction.measurement_tile_id,
+      .issue_cycle = _core_cycle,
+      .start_cycle = instruction.start_cycle,
+      .finish_cycle = instruction.finish_cycle,
+      .tile_m = instruction.tile_m,
+      .tile_k = instruction.tile_k,
+      .tile_n = instruction.tile_n,
+      .opcode = instruction.opcode,
+      .weight_block_id = instruction.sa_weight_block_id,
+      .weight_block_known = instruction.sa_weight_block_known,
+      .preload_sequence = instruction.sa_preload_sequence,
+      .analytical_preload_boundary =
+          instruction.sa_analytical_preload_boundary});
+}
+
+void SystolicWS::emit_regate_functional_profile() {
+  if (!_regate_functional_enabled || _regate_functional_emitted) {
+    return;
+  }
+  _regate_functional_emitted = true;
+
+  const uint32_t rows = _config.core_config[_id].core_height;
+  const uint32_t columns = _config.core_config[_id].core_width;
+  std::vector<sa_pe_state::WaveInterval> intervals;
+  intervals.reserve(_sa_region_intervals.size());
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    intervals.push_back(sa_pe_state::WaveInterval{
+        .issue_cycle = interval.issue_cycle,
+        .start_cycle = interval.start_cycle,
+        .finish_cycle = interval.finish_cycle,
+        .tile_m = interval.tile_m,
+        .tile_k = interval.tile_k,
+        .tile_n = interval.tile_n,
+        .opcode = interval.opcode == Opcode::GEMM_PRELOAD
+            ? sa_pe_state::WaveOpcode::PRELOAD
+            : sa_pe_state::WaveOpcode::GEMM,
+        .weight_block_id = interval.weight_block_id,
+        .weight_block_known = interval.weight_block_known});
+  }
+
+  const auto result = sa_pe_state::derive_regate_functional(
+      intervals, rows, columns, _core_cycle);
+  json classes = json::array();
+  for (const auto& item : result.control_classes) {
+    classes.push_back(json{
+        {"tile_m", item.tile_m},
+        {"tile_k", item.tile_k},
+        {"tile_n", item.tile_n},
+        {"occurrences", item.occurrences},
+        {"row_on_prefix_length", item.row_on_prefix_length},
+        {"col_on_prefix_length", item.col_on_prefix_length},
+        {"pe_on_wave_cycles", item.pe_on_wave_cycles},
+        {"on_pe_cycles_per_instruction",
+         item.on_pe_cycles_per_instruction},
+        {"isolated_formula_pe_on_assert_events_per_instruction",
+         item.pe_on_assert_events_per_instruction},
+        {"isolated_formula_pe_on_deassert_events_per_instruction",
+         item.pe_on_deassert_events_per_instruction}});
+  }
+
+  const uint64_t low_power_pe_cycles =
+      result.w_on_pe_cycles + result.off_pe_cycles;
+  const json exposure_percent =
+      result.state_partition_exact_under_model &&
+              result.capacity_pe_cycles != 0
+          ? json(100.0 * static_cast<double>(low_power_pe_cycles) /
+                 static_cast<double>(result.capacity_pe_cycles))
+          : json(nullptr);
+  const uint64_t observed_intervals = _sa_region_intervals.size();
+  const json assert_events = result.control_event_counts_valid
+      ? json(result.pe_on_assert_events)
+      : json(nullptr);
+  const json deassert_events = result.control_event_counts_valid
+      ? json(result.pe_on_deassert_events)
+      : json(nullptr);
+
+  json record{
+      {"version", 1},
+      {"core_id", _id},
+      {"model", "ReGate logical-control shadow approximation"},
+      {"evidence_class", "derived"},
+      {"evidence_inputs",
+       "ONNXim instruction issue/start/finish cycles, mapped dimensions, "
+       "opcode, and weight-block address identity"},
+      {"measurement_only", true},
+      {"control_path_modified", false},
+      {"outputs_and_timing_unchanged", true},
+      {"regate_only", true},
+      {"combined_with_retention", false},
+      {"array_rows", rows},
+      {"array_columns", columns},
+      {"core_cycles", _core_cycle},
+      {"sa_instruction_intervals", observed_intervals},
+      {"completed_intervals", result.completed_intervals},
+      {"incomplete_intervals", result.incomplete_intervals},
+      {"control_schedule_valid", result.control_schedule_valid},
+      {"control_event_counts_valid",
+       result.control_event_counts_valid},
+      {"invalid_dimension_intervals",
+       result.invalid_dimension_intervals},
+      {"wave_exceeds_instruction_intervals",
+       result.wave_exceeds_instruction_intervals},
+      {"overlapping_wave_intervals",
+       result.overlapping_wave_intervals},
+      {"unknown_weight_block_intervals",
+       result.unknown_weight_block_intervals},
+      {"gemm_without_preload_intervals",
+       result.gemm_without_preload_intervals},
+      {"weight_block_mismatch_intervals",
+       result.weight_block_mismatch_intervals},
+      {"footprint_mismatch_intervals",
+       result.footprint_mismatch_intervals},
+      {"weight_lifetime_complete",
+       result.weight_lifetime_complete},
+      {"pe_state_cycles",
+       json{{"capacity", result.capacity_pe_cycles},
+            {"on", result.on_pe_cycles},
+            {"w_on", result.w_on_pe_cycles},
+            {"off", result.off_pe_cycles},
+            {"unclassified", result.unclassified_pe_cycles},
+            {"partition_exact_under_model",
+             result.state_partition_exact_under_model}}},
+      {"ideal_low_power_pe_cycle_exposure_percent", exposure_percent},
+      {"pe_on_assert_events", assert_events},
+      {"pe_on_deassert_events", deassert_events},
+      {"control_classes", classes},
+      {"savings",
+       json{{"scope", "ReGate only"},
+            {"energy_saving_status", "pending"},
+            {"energy_saving_percent", nullptr},
+            {"reason",
+             "PE-state exposure is derived, but W_on/OFF circuit power, "
+             "entry/wake energy, and physical transition timing are not "
+             "inputs to this profile"}}},
+      {"semantics",
+       json{{"structural_masks",
+             "row_on[r]=(r<tile_m), col_on[c]=(c<tile_k); origin-packed "
+             "prefixes are derived from mapped dimensions"},
+            {"pe_on",
+             "for mapped PE(r,c), PE_on is high on "
+             "[start_cycle+r+c,start_cycle+r+c+tile_n)"},
+            {"drain",
+             "PE_on deasserts after the final input at each PE and drains "
+             "diagonally across rows and columns"},
+            {"state_priority",
+             "ON > committed/unclassified > W_on > OFF"},
+            {"wake_model",
+             "ideal zero-latency assertion; physical wake timing is pending"},
+            {"atomic_preload",
+             "the mapped weight footprint becomes valid atomically at the "
+             "ONNXim instruction start cycle"},
+            {"weight_value_sparsity",
+             "pending: current metadata provides mapped dimensions and "
+             "addresses, not tensor values"}}},
+      {"reference",
+       json{{"paper",
+             "ReGate: Enabling Power Gating in Neural Processing Units"},
+            {"paper_locator", "Section 4.1 and Table 3"},
+            {"artifact_commit",
+             "004dbfccb90cfc0a61bb79bbee3a5770b4b3897b"},
+            {"artifact_locator",
+             "trace_util/llm_ops_generator/"
+             "power_analysis_lib.py:328-356,432-540"}}},
+      {"assumptions",
+       json::array({
+           "mapped tile footprints are origin-packed",
+           "tile dimensions identify structural padding only",
+           "local useful-wave cycle is row+column+input_wave",
+           "weight preload is atomic at ONNXim instruction start",
+           "logical PE_on assertion has zero physical wake latency"})},
+      {"validation_pass",
+       result.control_schedule_valid &&
+           result.state_partition_exact_under_model}};
+  spdlog::info("REGATE_FUNCTIONAL_PROFILE {}", record.dump());
+}
+
+
+void SystolicWS::emit_regate_two_bank_profile() {
+  if (!_regate_two_bank_enabled || _regate_two_bank_emitted) {
+    return;
+  }
+  _regate_two_bank_emitted = true;
+
+  const uint32_t rows = _config.core_config[_id].core_height;
+  const uint32_t columns = _config.core_config[_id].core_width;
+  std::vector<sa_pe_state::WaveInterval> intervals;
+  intervals.reserve(_sa_region_intervals.size());
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    intervals.push_back(sa_pe_state::WaveInterval{
+        .issue_cycle = interval.issue_cycle,
+        .start_cycle = interval.start_cycle,
+        .finish_cycle = interval.finish_cycle,
+        .tile_m = interval.tile_m,
+        .tile_k = interval.tile_k,
+        .tile_n = interval.tile_n,
+        .opcode = interval.opcode == Opcode::GEMM_PRELOAD
+            ? sa_pe_state::WaveOpcode::PRELOAD
+            : sa_pe_state::WaveOpcode::GEMM,
+        .weight_block_id = interval.weight_block_id,
+        .weight_block_known = interval.weight_block_known});
+  }
+  const char* rowwise_flag =
+      std::getenv("ONNXSIM_REGATE_ROW_PRELOAD_PROFILE");
+  const bool rowwise_requested = rowwise_flag != nullptr &&
+      rowwise_flag[0] != '\0' && std::string(rowwise_flag) != "0";
+  auto parse_rowwise_cycles = [](const char* name)
+      -> std::optional<uint64_t> {
+    const char* raw = std::getenv(name);
+    if (!raw || !raw[0]) return std::nullopt;
+    uint64_t value = 0;
+    const char* end = raw + std::char_traits<char>::length(raw);
+    const auto parsed = std::from_chars(raw, end, value);
+    if (parsed.ec != std::errc{} || parsed.ptr != end) {
+      return std::nullopt;
+    }
+    return value;
+  };
+  std::optional<sa_pe_state::RowWriteTiming> row_write_timing;
+  if (rowwise_requested) {
+    const auto lead = parse_rowwise_cycles(
+        "ONNXSIM_REGATE_ROW_PRELOAD_LEAD_CYCLES");
+    const auto period = parse_rowwise_cycles(
+        "ONNXSIM_REGATE_ROW_PRELOAD_PERIOD_CYCLES");
+    const auto duration = parse_rowwise_cycles(
+        "ONNXSIM_REGATE_ROW_PRELOAD_DURATION_CYCLES");
+    const char* raw_order =
+        std::getenv("ONNXSIM_REGATE_ROW_PRELOAD_ORDER");
+    const std::string order = raw_order ? raw_order : "";
+    if (lead && period && duration && *period != 0 && *duration != 0 &&
+        (order == "ascending" || order == "descending")) {
+      row_write_timing.emplace(sa_pe_state::RowWriteTiming{
+          *lead, *period, *duration,
+          order == "ascending"
+              ? sa_pe_state::RowWriteOrder::ASCENDING_PE_ROW
+              : sa_pe_state::RowWriteOrder::DESCENDING_PE_ROW});
+    }
+  }
+  const auto result = sa_pe_state::derive_two_bank_regate(
+      intervals, rows, columns, _core_cycle,
+      row_write_timing ? &*row_write_timing : nullptr);
+  const auto timing_case_json =
+      [](const sa_pe_state::TwoBankTimingCase& timing_case) {
+        return json{
+            {"global",
+             timing_case.global_applicable
+                 ? json{{"peak_live_preloads",
+                         timing_case.global_peak_live_preloads},
+                        {"over_two_cycles",
+                         timing_case.global_over_two_cycles}}
+                 : json(nullptr)},
+            {"mapped_pe",
+             json{{"peak_live_preloads",
+                   timing_case.mapped_pe_peak_live_preloads},
+                  {"over_two_pe_cycles",
+                   timing_case.mapped_pe_over_two_pe_cycles},
+                  {"pes_ever_over_two",
+                   timing_case.mapped_pes_ever_over_two}}}};
+      };
+  const auto& timing = result.timing_audit;
+  const json timing_audit = timing.available
+      ? json{{"available", true},
+             {"evidence_class", "derived"},
+             {"physical_feasibility_proven", false},
+             {"matched_gemm_consumers", timing.matched_gemm_consumers},
+             {"issue_to_whole_finish",
+              timing_case_json(timing.issue_to_whole_finish)},
+             {"start_to_whole_finish",
+              timing_case_json(timing.start_to_whole_finish)},
+             {"issue_to_pe_last_mac",
+              timing_case_json(timing.issue_to_pe_last_mac)},
+             {"start_to_pe_last_mac",
+              timing_case_json(timing.start_to_pe_last_mac)},
+             {"pe_first_to_pe_last_mac",
+              timing_case_json(timing.pe_first_to_pe_last_mac)},
+             {"interpretation",
+              "Counterfactual overlap of exact matched preload instances. "
+              "Start-time and PE-first-use reservation assume zero-duration "
+              "loading; they do not establish a physical preload schedule."}}
+      : json{{"available", false},
+             {"reason",
+              "A complete valid wave trace with known, exactly matched "
+              "weight identities and footprints is required."}};
+
+  const auto& feasibility = result.preload_feasibility_audit;
+  json preload_feasibility_events = json::array();
+  json preload_feasibility_offenders = json::array();
+  for (const auto& event : feasibility.events) {
+    const json event_json{
+        {"preload_index", event.preload_index},
+        {"instruction_index", event.instruction_index},
+        {"weight_block_id", event.weight_block_id},
+        {"issue_cycle", event.issue_cycle},
+        {"start_cycle", event.start_cycle},
+        {"rows", event.rows},
+        {"columns", event.columns},
+        {"fill_span_cycles", event.fill_span_cycles},
+        {"planned_load_begin",
+         event.planned_load_begin_available
+             ? json(event.planned_load_begin_cycle)
+             : json(nullptr)},
+        {"load_begin", event.load_begin_cycle},
+        {"bank_ready", event.bank_ready_cycle},
+        {"first_use", event.first_use_cycle},
+        {"required_stall_cycles", event.required_stall_cycles},
+        {"outcome", event.no_added_cycle ? "no_added_cycle"
+                                          : "conflict"}};
+    preload_feasibility_events.push_back(event_json);
+    if (!event.no_added_cycle) {
+      preload_feasibility_offenders.push_back(event_json);
+    }
+  }
+  const json preload_feasibility_audit = !rowwise_requested
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "Opt in and explicitly supply row period and row "
+                        "write duration; the rowwise profile flag and all "
+                        "of its explicit inputs are required."}}
+      : !row_write_timing
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "Row timing inputs are missing or invalid."}}
+      : !feasibility.available
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "A complete valid trace with known, exactly "
+                        "matched preload identities and footprints is "
+                        "required."}}
+      : json{{"version", 1},
+             {"available", true},
+             {"evidence_class", "derived"},
+             {"timing_input_evidence_class", "assumed"},
+             {"physical_feasibility_proven", false},
+             {"input_arrival_assumption",
+              "optimistic: each scheduled row is already available at the "
+              "SA input after issue-time operand validity; per-row "
+              "scratchpad read, assembly, and delivery latency beyond issue "
+              "is not exposed"},
+             {"fill_span_equation",
+              "(rows - 1) * row_start_period_cycles + "
+              "row_write_duration_cycles"},
+             {"planned_load_begin_equation",
+              "start_cycle - fill_span_cycles"},
+             {"load_begin_equation",
+              "max(issue_cycle, planned_load_begin)"},
+             {"bank_ready_equation",
+              "load_begin + fill_span_cycles"},
+             {"first_use_equation", "start_cycle"},
+             {"required_stall_equation",
+              "max(0, bank_ready - first_use)"},
+             {"audited_preloads", feasibility.audited_preloads},
+             {"no_added_cycle_preloads",
+              feasibility.no_added_cycle_preloads},
+             {"conflicting_preloads", feasibility.conflicting_preloads},
+             {"total_required_stall_cycles",
+              feasibility.total_required_stall_cycles},
+             {"max_required_stall_cycles",
+              feasibility.max_required_stall_cycles},
+             {"total_interpretation",
+              "sum of independent fixed-schedule per-PRELOAD stalls; not a "
+              "globally propagated runtime or an ONNXim cycle change"},
+             {"events", preload_feasibility_events},
+             {"offending_events", preload_feasibility_offenders},
+             {"limitations",
+              "Passing proves only whole-bank row-stream readiness under "
+              "the assumed at-SA-input timing. Shared-bus arbitration, "
+              "post-issue scratchpad row delivery, global bank selection, "
+              "forwarding, and circuit timing remain unproven."}};
+
+  const auto& rowwise = result.rowwise_feasibility;
+  const auto complete_rowwise_count = [&](uint64_t value) -> json {
+    return rowwise.secondary_counts_complete ? json(value) : json(nullptr);
+  };
+  json preload_readiness_audit{
+      {"version", 1},
+      {"available", rowwise.available},
+      {"evidence_class", rowwise.available ? json("derived")
+                                            : json("pending")},
+      {"timing_input_evidence_class", "assumed"},
+      {"physical_feasibility_proven", false},
+      {"first_use_equation", "start_cycle + pe_row"},
+      {"required_stall_equation",
+       "max(0, bank_ready - first_use)"},
+      {"outcome_scope",
+       "Per-PE necessary shadow with causal issue and local two-bank "
+       "availability constraints. It does not propagate a delayed row "
+       "through a shared row bus or prove globally consistent bank indices."},
+      {"audited_preloads", rowwise.audited_preloads},
+      {"audited_preload_rows", rowwise.audited_preload_rows},
+      {"outcome",
+       rowwise.conflicting_preloads == 0 ? "no_added_cycle"
+                                         : "conflict"},
+      {"no_added_cycle_preloads", rowwise.no_added_cycle_preloads},
+      {"conflicting_preloads", rowwise.conflicting_preloads},
+      {"conflicting_preload_rows", rowwise.conflicting_preload_rows},
+      {"schedule_diagnostic_preloads",
+       rowwise.schedule_diagnostic_preloads},
+      {"schedule_diagnostic_rows", rowwise.schedule_diagnostic_rows},
+      {"sum_row_required_stall_cycles",
+       rowwise.sum_row_required_stall_cycles},
+      {"total_required_stall_cycles",
+       rowwise.total_required_stall_cycles},
+      {"max_required_stall_cycles", rowwise.max_required_stall_cycles},
+      {"preloads", json::array()},
+      {"offending_events", json::array()},
+      {"bank_conflicts", json::array()}};
+  for (const auto& preload : rowwise.preload_audit) {
+    json preload_json{
+        {"preload_index", preload.preload_index},
+        {"instruction_index", preload.instruction_index},
+        {"weight_block_id", preload.weight_block_id},
+        {"issue_cycle", preload.issue_cycle},
+        {"start_cycle", preload.start_cycle},
+        {"tile_m", preload.tile_m},
+        {"tile_k", preload.tile_k},
+        {"tile_n", preload.tile_n},
+        {"planned_load_begin",
+         preload.planned_load_begin_available
+             ? json(preload.planned_load_begin_cycle)
+             : json(nullptr)},
+        {"load_begin", preload.load_begin_cycle},
+        {"outcome", preload.no_added_cycle ? "no_added_cycle"
+                                             : "conflict"},
+        {"conflicting_rows", preload.conflicting_rows},
+        {"sum_row_required_stall_cycles",
+         preload.sum_row_required_stall_cycles},
+        {"required_stall_cycles", preload.required_stall_cycles},
+        {"rows", json::array()},
+        {"offending_events", json::array()},
+        {"bank_conflicts", json::array()}};
+    for (const auto& row : preload.rows) {
+      json diagnostics = json::array();
+      if (!row.planned_load_begin_available) {
+        diagnostics.push_back("load_begin_before_cycle_zero");
+      } else if (row.load_before_issue) {
+        diagnostics.push_back("load_begin_before_issue");
+      }
+      if (row.max_local_bank_wait_cycles != 0) {
+        diagnostics.push_back("two_bank_unavailable_at_causal_load");
+      }
+      json conflict_reasons = json::array();
+      if (row.required_stall_cycles != 0) {
+        conflict_reasons.push_back("bank_not_ready_at_first_use");
+      }
+      json row_json{
+          {"preload_index", preload.preload_index},
+          {"pe_row", row.pe_row},
+          {"ordered_row_index", row.ordered_row_index},
+          {"planned_load_begin",
+           row.planned_load_begin_available
+               ? json(row.planned_load_begin_cycle)
+               : json(nullptr)},
+          {"load_begin",
+           row.load_begin_cycle},
+          {"bank_ready", row.bank_ready_cycle},
+          {"first_use", row.first_use_cycle},
+          {"outcome", row.no_added_cycle ? "no_added_cycle"
+                                           : "conflict"},
+          {"required_stall_cycles", row.required_stall_cycles},
+          {"max_local_bank_wait_cycles",
+           row.max_local_bank_wait_cycles},
+          {"schedule_diagnostics", diagnostics},
+          {"conflict_reasons", conflict_reasons}};
+      preload_json["rows"].push_back(row_json);
+      if (!row.no_added_cycle) {
+        preload_json["offending_events"].push_back(row_json);
+        preload_readiness_audit["offending_events"].push_back(row_json);
+      }
+    }
+    for (const auto& conflict : preload.bank_conflicts) {
+      const json conflict_json{
+          {"preload_index", conflict.preload_index},
+          {"pe_row", conflict.pe_row},
+          {"pe_column", conflict.pe_column},
+          {"planned_load_begin", conflict.planned_load_begin_cycle},
+          {"earliest_bank_release",
+           conflict.earliest_bank_release_cycle},
+          {"load_begin", conflict.load_begin_cycle},
+          {"bank_ready", conflict.bank_ready_cycle},
+          {"first_use", conflict.first_use_cycle},
+          {"required_stall_cycles", conflict.required_stall_cycles}};
+      preload_json["bank_conflicts"].push_back(conflict_json);
+      preload_readiness_audit["bank_conflicts"].push_back(conflict_json);
+    }
+    preload_readiness_audit["preloads"].push_back(preload_json);
+  }
+  const json rowwise_feasibility = !rowwise_requested
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "Opt in and explicitly supply first-row lead, "
+                        "row period, row write duration, and row order."}}
+      : !row_write_timing
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "Lead, period, and duration must be valid unsigned "
+                        "integers; period and duration must be positive; "
+                        "order must be ascending or descending."}}
+      : !rowwise.available
+      ? json{{"available", false},
+             {"evidence_class", "pending"},
+             {"reason", "At least one explicit preload and a complete "
+                        "valid wave trace with known, exactly matched weight "
+                        "identities and footprints are required."}}
+      : json{{"available", true},
+             {"evidence_class", "derived"},
+             {"timing_input_evidence_class", "assumed"},
+             {"first_row_lead_cycles_before_start",
+              row_write_timing->first_row_lead_cycles_before_start},
+             {"row_start_period_cycles",
+              row_write_timing->row_start_period_cycles},
+             {"row_write_duration_cycles",
+              row_write_timing->row_write_duration_cycles},
+             {"row_order",
+              row_write_timing->row_order ==
+                      sa_pe_state::RowWriteOrder::ASCENDING_PE_ROW
+                  ? "ascending"
+                  : "descending"},
+             {"row_columns_written_simultaneously_assumption", true},
+             {"row_write_start_equation",
+              "start_cycle - first_row_lead_cycles_before_start + "
+              "ordered_row_index * row_start_period_cycles"},
+             {"row_ready_equation",
+              "row_write_start + row_write_duration_cycles"},
+             {"bank_release_equation",
+              "max(row_ready, last local modeled MAC end across the "
+              "preload and its exactly matched later GEMMs)"},
+             {"necessary_conditions_pass",
+              rowwise.necessary_conditions_pass},
+             {"secondary_counts_complete",
+              rowwise.secondary_counts_complete},
+             {"secondary_counts_status",
+              rowwise.secondary_counts_complete
+                  ? "complete under assumed schedule"
+                  : "pending: pre-issue writes were skipped; occupancy, "
+                    "readiness, and local-wait counts are partial"},
+             {"physical_feasibility_proven", false},
+             {"mapped_pe_weight_write_events",
+              rowwise.mapped_pe_weight_write_events},
+             {"row_write_before_issue_events",
+              rowwise.row_write_before_issue_events},
+             {"row_ready_after_first_mac_events",
+              complete_rowwise_count(
+                  rowwise.row_ready_after_first_mac_events)},
+             {"max_row_ready_lateness_cycles",
+              complete_rowwise_count(
+                  rowwise.max_row_ready_lateness_cycles)},
+             {"mapped_pe_peak_live_preloads",
+              complete_rowwise_count(
+                  rowwise.mapped_pe_peak_live_preloads)},
+             {"mapped_pe_over_two_pe_cycles",
+              complete_rowwise_count(
+                  rowwise.mapped_pe_over_two_pe_cycles)},
+             {"mapped_pes_ever_over_two",
+              complete_rowwise_count(
+                  rowwise.mapped_pes_ever_over_two)},
+             {"locally_blocked_pe_weight_write_events",
+              complete_rowwise_count(
+                  rowwise.locally_blocked_pe_weight_write_events)},
+             {"max_local_bank_wait_cycles",
+              complete_rowwise_count(
+                  rowwise.max_local_bank_wait_cycles)},
+             {"max_local_first_mac_delay_cycles",
+              complete_rowwise_count(
+                  rowwise.max_local_first_mac_delay_cycles)},
+             {"per_row_local_audit", preload_readiness_audit},
+             {"stall_interpretation",
+              "Local no-stall conflict diagnostic with earlier planned "
+              "reservations held fixed. Neither an actual ONNXim stall "
+              "measurement nor a globally rescheduled latency."},
+             {"limitations",
+              "Passing checks are necessary only: no shared row-bus "
+              "bandwidth, consistent bank selector, forwarding, control "
+              "latency, or functional correctness is verified."}};
+
+  const auto& row_state = result.rowwise_state_accounting;
+  const json rowwise_state_accounting{
+      {"version", 1},
+      {"available", row_state.available},
+      {"evidence_class",
+       row_state.available ? json("derived") : json("pending")},
+      {"timing_input_evidence_class", "assumed"},
+      {"validation_pass", row_state.validation_pass},
+      {"required_checks",
+       json{{"complete_known_matched_trace", row_state.available},
+            {"rowwise_timing_and_two_bank_checks",
+             row_state.available
+                 ? json(rowwise.necessary_conditions_pass)
+                 : json(nullptr)},
+            {"state_partition", row_state.partition_check_pass}}},
+      {"failure_policy",
+       "Any unavailable or failed required check assigns the complete "
+       "rowwise capacity to unclassified and zeros every classified state."},
+      {"classification_convention",
+       "Only modeled MAC waves are ON. An assumed row write is separate "
+       "preload-write exposure; without a MAC, its live logical bank is "
+       "W_on. GEMM_PRELOAD contributes its own fused activation wave to "
+       "on_preload_wave, and exactly matched later GEMMs contribute to "
+       "on_gemm_wave."},
+      {"pe_state_cycles",
+       json{{"capacity", row_state.capacity_pe_cycles},
+            {"on", row_state.on_pe_cycles},
+            {"on_preload_wave", row_state.on_preload_wave_pe_cycles},
+            {"on_gemm_wave", row_state.on_gemm_wave_pe_cycles},
+            {"on_zero_banks", row_state.on_zero_bank_pe_cycles},
+            {"on_one_bank", row_state.on_one_bank_pe_cycles},
+            {"on_two_banks", row_state.on_two_bank_pe_cycles},
+            {"w_on_one_bank", row_state.w_on_one_bank_pe_cycles},
+            {"w_on_two_banks", row_state.w_on_two_bank_pe_cycles},
+            {"off", row_state.off_pe_cycles},
+            {"unclassified", row_state.unclassified_pe_cycles}}},
+      {"preload_write_exposure",
+       json{{"evidence_class",
+             row_state.validation_pass ? "derived" : "pending"},
+            {"timing_input_evidence_class", "assumed"},
+            {"pe_cycles",
+             row_state.validation_pass
+                 ? json(row_state.preload_write_pe_cycles)
+                 : json(nullptr)},
+            {"while_on_pe_cycles",
+             row_state.validation_pass
+                 ? json(row_state.preload_write_while_on_pe_cycles)
+                 : json(nullptr)},
+            {"disjoint_from_state_partition", false}}},
+      {"physical_feasibility_proven", false},
+      {"actual_stall_cycles", nullptr},
+      {"gross_static_saving_percent", nullptr},
+      {"net_energy_saving_percent", nullptr},
+      {"limitations",
+       "The complete logical partition is conditional on the supplied "
+       "row schedule and checked trace identities/footprints. It does not "
+       "prove row-bus bandwidth, a causal bank selector, forwarding, "
+       "functional correctness, circuit state power, or transition timing."}};
+
+  const json record{
+      {"version", 2},
+      {"core_id", _id},
+      {"model", "two-bank ReGate-like analytical shadow"},
+      {"evidence_class", "derived"},
+      {"evidence_inputs",
+       "ONNXim instruction issue/start/finish cycles, mapped dimensions, "
+       "opcode, and interned weight-block address identity"},
+      {"measurement_only", true},
+      {"control_path_modified", false},
+      {"regate_only", true},
+      {"combined_with_retention", false},
+      {"two_bank_assumption", true},
+      {"atomic_preload_assumption", true},
+      {"array_rows", rows},
+      {"array_columns", columns},
+      {"core_cycles", _core_cycle},
+      {"sa_instruction_intervals", intervals.size()},
+      {"preload_events", result.preload_events},
+      {"gemm_events", result.gemm_events},
+      {"preload_bank_pe_cycles", result.preload_bank_pe_cycles},
+      {"validation_pass", result.validation_pass},
+      {"validation",
+       json{{"incomplete_intervals", result.incomplete_intervals},
+            {"invalid_intervals", result.invalid_intervals},
+            {"unknown_weight_intervals",
+             result.unknown_weight_intervals},
+            {"gemm_without_weight_intervals",
+             result.gemm_without_weight_intervals},
+            {"footprint_mismatch_intervals",
+             result.footprint_mismatch_intervals},
+            {"weight_not_ready_intervals",
+             result.weight_not_ready_intervals},
+            {"weight_evicted_before_use_intervals",
+             result.weight_evicted_before_use_intervals},
+            {"wave_exceeds_instruction_intervals",
+             result.wave_exceeds_instruction_intervals},
+            {"compute_collisions", result.compute_collisions},
+            {"two_bank_conflicts", result.two_bank_conflicts}}},
+      {"timing_audit", timing_audit},
+      {"preload_feasibility_audit", preload_feasibility_audit},
+      {"rowwise_feasibility", rowwise_feasibility},
+      {"rowwise_state_accounting", rowwise_state_accounting},
+      {"pe_state_cycles",
+       json{{"capacity", result.capacity_pe_cycles},
+            {"on", result.on_pe_cycles},
+            {"on_zero_banks", result.on_zero_bank_pe_cycles},
+            {"on_one_bank", result.on_one_bank_pe_cycles},
+            {"on_two_banks", result.on_two_bank_pe_cycles},
+            {"w_on_one_bank", result.w_on_one_bank_pe_cycles},
+            {"w_on_two_banks", result.w_on_two_bank_pe_cycles},
+            {"off", result.off_pe_cycles},
+            {"unclassified", result.unclassified_pe_cycles}}},
+      {"gross_static_saving_percent", nullptr},
+      {"net_energy_saving_percent", nullptr},
+      {"energy_status",
+       "pending: separate ON/W_on leakage for one and two powered banks, "
+       "OFF leakage, preload activity, control and transition energy are "
+       "required for circuit-calibrated savings"},
+      {"assumptions",
+       json::array({
+           "two logical weight banks per PE; ONNXim does not select a bank",
+           "each explicit GEMM_PRELOAD creates a new preload instance",
+           "a GEMM uses the latest prior matching preload by identity and footprint",
+           "a bank is replaceable after all matched instruction consumers finish",
+           "resident weights remain mapped until that bank is overwritten",
+           "the whole mapped footprint powers at issue; it becomes ready at start",
+           "mapped footprints are origin-packed structural rectangles",
+           "per-bank origin-packed forwarding rectangles are unioned",
+           "bank assignment is offline and uses later consumers in the trace",
+           "PE(r,c) is ON during [start+r+c,start+r+c+tile_n)",
+           "ON has priority over mapped loading and resident bank states",
+           "logical state changes have no modeled transition latency"})},
+      {"limitations",
+       "This instruction-level approximation does not reconstruct per-PE "
+       "weight arrival or prove a physical two-bank ReGate implementation. "
+       "Schedules incompatible with issue-time atomic two-bank occupancy "
+       "fail closed with full capacity unclassified; staggered physical "
+       "loading may differ. OFF outside mapped rectangles assumes routing "
+       "closure or bypass and is not functionally verified for every array."}};
+  spdlog::info("REGATE_TWO_BANK_PROFILE {}", record.dump());
+}
+
+void SystolicWS::emit_updated_regate_profile() {
+  if (!_updated_regate_enabled || _updated_regate_emitted) {
+    return;
+  }
+  _updated_regate_emitted = true;
+  const uint32_t rows = _config.core_config[_id].core_height;
+  const uint32_t columns = _config.core_config[_id].core_width;
+  std::vector<sa_pe_state::UpdatedShadowInterval> intervals;
+  intervals.reserve(_sa_region_intervals.size());
+  uint64_t assumed_preload_boundary_events = 0;
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    const bool analytical_boundary =
+        interval.opcode == Opcode::GEMM &&
+        interval.analytical_preload_boundary;
+    if (analytical_boundary) ++assumed_preload_boundary_events;
+    intervals.push_back(sa_pe_state::UpdatedShadowInterval{
+        .stream_id = interval.stream_id,
+        .issue_cycle = interval.issue_cycle,
+        .simulator_start_cycle = interval.start_cycle,
+        .simulator_finish_cycle = interval.finish_cycle,
+        .tile_m = interval.tile_m,
+        .tile_k = interval.tile_k,
+        .tile_n = interval.tile_n,
+        .opcode = interval.opcode == Opcode::GEMM_PRELOAD ||
+                          analytical_boundary
+            ? sa_pe_state::WaveOpcode::PRELOAD
+            : sa_pe_state::WaveOpcode::GEMM,
+        .preload_sequence = interval.preload_sequence});
+  }
+  const auto result = sa_pe_state::derive_updated_two_bank_shadow(
+      intervals, rows, columns, _core_cycle);
+  json events = json::array();
+  for (const auto& event : result.events) {
+    const SaRegionInterval& source =
+        _sa_region_intervals.at(event.input_index);
+    events.push_back(json{
+        {"input_index", event.input_index},
+        {"tile_stream_id", event.stream_id},
+        {"preload_instance", event.preload_instance},
+        {"opcode", source.opcode == Opcode::GEMM_PRELOAD
+                       ? "GEMM_PRELOAD" : "GEMM"},
+        {"analytical_role", event.opcode == sa_pe_state::WaveOpcode::PRELOAD
+                                ? "preload_boundary" : "gemm_consumer"},
+        {"analytical_preload_boundary_assumed",
+         source.opcode == Opcode::GEMM &&
+             source.analytical_preload_boundary},
+        {"assumed_bank", event.bank},
+        {"tile_m", source.tile_m},
+        {"tile_k", source.tile_k},
+        {"tile_n", source.tile_n},
+        {"issue_cycle", event.issue_cycle},
+        {"loading_start_cycle", event.loading_start_cycle},
+        {"loading_finish_cycle", event.loading_finish_cycle},
+        {"analytical_compute_start", event.compute_start_cycle},
+        {"analytical_compute_finish", event.compute_finish_cycle},
+        {"onnxim_compute_start", event.simulator_start_cycle},
+        {"onnxim_compute_finish", event.simulator_finish_cycle},
+        {"event_start_lateness_cycles", event.start_lateness_cycles},
+        {"event_finish_lateness_cycles", event.finish_lateness_cycles}});
+  }
+  json reference_off_episodes = json::array();
+  uint64_t reference_off_cycles = 0;
+  for (const auto& [begin, end] : _reference_sa_logic_off_episodes) {
+    reference_off_episodes.push_back(
+        json{{"start_cycle", begin}, {"end_cycle", end}});
+    reference_off_cycles += end - begin;
+  }
+  if (_reference_sa_logic_off) {
+    reference_off_episodes.push_back(
+        json{{"start_cycle", _reference_sa_logic_off_start},
+             {"end_cycle", _core_cycle}});
+    reference_off_cycles += _core_cycle - _reference_sa_logic_off_start;
+  }
+  const json record{
+      {"version", 1},
+      {"core_id", _id},
+      {"model", "updated predictor plus two-bank ReGate-like analytical shadow"},
+      {"measurement_only", true},
+      {"control_path_modified", false},
+      {"functional_scheduling_unchanged", true},
+      {"timing_evidence_class", "assumed"},
+      {"state_accounting_evidence_class", "derived"},
+      {"energy_saving_status", "pending"},
+      {"energy_saving_percent", nullptr},
+      {"array_rows", rows},
+      {"array_columns", columns},
+      {"weight_bytes", _config.precision},
+      {"onnxim_horizon_cycles", _core_cycle},
+      {"analytical_horizon_cycles", result.analytical_horizon_cycles},
+      {"preload_events", result.preload_events},
+      {"assumed_preload_boundary_events", assumed_preload_boundary_events},
+      {"analytical_boundary_provenance",
+       "Native GEMM markers are treated as assumed preload boundaries only "
+       "inside this analytical shadow; ONNXim opcode and timing are unchanged. "
+       "They do not certify a physical weight reload or OFF safety."},
+      {"gemm_events", result.gemm_events},
+      {"validation_pass", result.validation_pass},
+      {"validation",
+       json{{"preload_first_valid", result.preload_first_valid},
+            {"bank_assignment_valid", result.bank_assignment_valid},
+            {"state_partition_exact", result.state_partition_exact},
+            {"invalid_intervals", result.invalid_intervals},
+            {"sequence_errors", result.sequence_errors},
+            {"footprint_mismatch_intervals",
+             result.footprint_mismatch_intervals},
+            {"bank_assignment_conflicts",
+             result.bank_assignment_conflicts}}},
+      {"pe_state_cycles",
+       json{{"capacity", result.capacity_pe_cycles},
+            {"on", result.on_pe_cycles},
+            {"on_zero_banks", result.on_zero_bank_pe_cycles},
+            {"on_one_bank", result.on_one_bank_pe_cycles},
+            {"on_two_banks", result.on_two_bank_pe_cycles},
+            {"w_on", result.w_on_pe_cycles},
+            {"w_on_one_bank", result.w_on_one_bank_pe_cycles},
+            {"w_on_two_banks", result.w_on_two_bank_pe_cycles},
+            {"loading", result.loading_pe_cycles},
+            {"off", result.off_pe_cycles},
+            {"unclassified", result.unclassified_pe_cycles}}},
+      {"preload_write_exposure",
+       json{{"pe_cycles", result.preload_write_pe_cycles},
+            {"while_on_pe_cycles",
+             result.preload_write_while_on_pe_cycles},
+            {"disjoint_from_state_partition", false}}},
+      {"timing_disagreement",
+       json{{"interpretation",
+             "Schedule-aware analytical comparison only; no timing is "
+             "injected into ONNXim. Event-lateness sums are not an "
+             "aggregate trace-latency penalty."},
+            {"sum_event_start_lateness_cycles",
+             result.sum_event_start_lateness_cycles},
+            {"max_event_start_lateness_cycles",
+             result.max_event_start_lateness_cycles},
+            {"sum_event_finish_lateness_cycles",
+             result.sum_event_finish_lateness_cycles},
+            {"max_event_finish_lateness_cycles",
+             result.max_event_finish_lateness_cycles},
+            {"simulator_trace_makespan_cycles",
+             result.simulator_trace_makespan_cycles},
+            {"analytical_trace_makespan_cycles",
+             result.analytical_trace_makespan_cycles},
+            {"trace_makespan_extension_cycles",
+             result.trace_makespan_extension_cycles}}},
+      {"predictor_reference_whole_sa_logic",
+       json{{"policy_evidence_class", "extrapolated"},
+            {"predictor_input", "fresh work-drain safe horizon per idle cycle"},
+            {"domain", "compute logic only; weight banks independent"},
+            {"break_even_cycles", 469},
+            {"wake_latency_cycles", 10},
+            {"off_cycles", reference_off_cycles},
+            {"off_episodes", reference_off_episodes},
+            {"late_wake_events", _reference_sa_logic_late_wake_events},
+            {"max_local_wake_lateness_cycles",
+             _reference_sa_logic_max_late_wake_cycles},
+            {"actual_stall_cycles", nullptr},
+            {"timing_modified", false}}},
+      {"assumptions",
+       json::array({
+           "two logical weight banks per PE and one shared MAC datapath",
+           "every explicit GEMM_PRELOAD, or native GEMM with an analytical boundary marker, creates an assumed distinct weight copy",
+           "ordinary GEMM consumes the latest preload in the same tile stream",
+           "offline bank assignment selects the free bank with the earliest feasible preload load start",
+           "one mapped stationary-weight row is written per cycle and all mapped columns in that row are written in parallel",
+           "one preload lane may overlap the other bank's compute wave",
+           "compute waves are serialized",
+           "PE(r,c) is ON on [start+r+c,start+r+c+tile_n)",
+           "state priority is ON over LOADING over W_on over OFF",
+           "edge footprints use tile_m by tile_k; semantic convolution activation padding is not treated as absent stationary weights"})},
+      {"energy_parameters_required",
+       json::array({
+           "ON/W_on/LOADING/OFF power with one and two live banks",
+           "entry, wake, and bank-switch energy",
+           "entry, wake, preload, and bank-switch latency",
+           "second-bank, selector, controller, isolation, switch, and routing overhead"})},
+      {"power_gating_break_even_status",
+       "pending full-SA two-bank circuit calibration; a one-PE partial-collapse "
+       "reference threshold is sensitivity input only, not a validated break-even"},
+      {"events", events}};
+  if (_legacy_updated_regate_enabled) {
+    spdlog::info("REGATE_UPDATED_PROFILE {}", record.dump());
+  }
+  if (_event_driven_regate_enabled) {
+    const json source_record{
+        {"version", 1},
+        {"core_id", _id},
+        {"model", "event-driven unified PE and two-bank analytical source"},
+        {"measurement_only", true},
+        {"functional_scheduling_unchanged", true},
+        {"legacy_whole_sa_predictor_used", false},
+        {"event_driven_replay_required", true},
+        {"array_rows", rows},
+        {"array_columns", columns},
+        {"weight_bytes", _config.precision},
+        {"onnxim_horizon_cycles", _core_cycle},
+        {"analytical_horizon_cycles", result.analytical_horizon_cycles},
+        {"validation_pass", result.validation_pass},
+        {"validation", record["validation"]},
+        {"preload_boundary_provenance",
+         "Explicit GEMM_PRELOAD is an ONNXim opcode. A native GEMM with "
+         "an analytical boundary marker is only an assumed preload in "
+         "this source trace, not a physical weight movement."},
+        {"source_bank_assignment_assumptions",
+         json::array({
+             "bank IDs come from the older serialized analytical shadow and may fail its validation",
+             "one origin-aligned tile_m-by-tile_k weight rectangle",
+             "native ONNXim compute start/finish are separately recorded and must anchor the new replay",
+             "shadow analytical compute times and row-write times are not native ONNXim timing"})},
+        {"events", events}};
+    spdlog::info("REGATE_EVENT_DRIVEN_SOURCE {}", source_record.dump());
+  }
+}
+
+void SystolicWS::emit_sa_region_profile() {
+  if (!_sa_region_profile_enabled || _sa_region_profile_emitted) {
+    return;
+  }
+  _sa_region_profile_emitted = true;
+
+  const uint32_t array_rows = _config.core_config[_id].core_height;
+  const uint32_t array_columns = _config.core_config[_id].core_width;
+
+  auto merge_spans = [&](std::vector<std::pair<cycle_type, cycle_type>> spans) {
+    for (auto& span : spans) {
+      span.first = MIN(span.first, _core_cycle);
+      span.second = MIN(span.second, _core_cycle);
+    }
+    spans.erase(std::remove_if(spans.begin(), spans.end(),
+                               [](const auto& span) {
+                                 return span.second <= span.first;
+                               }),
+                spans.end());
+    std::sort(spans.begin(), spans.end());
+    if (spans.empty()) {
+      return spans;
+    }
+    std::vector<std::pair<cycle_type, cycle_type>> merged;
+    merged.reserve(spans.size());
+    cycle_type start = spans.front().first;
+    cycle_type finish = spans.front().second;
+    for (size_t index = 1; index < spans.size(); ++index) {
+      if (spans[index].first <= finish) {
+        finish = MAX(finish, spans[index].second);
+      } else {
+        merged.emplace_back(start, finish);
+        start = spans[index].first;
+        finish = spans[index].second;
+      }
+    }
+    merged.emplace_back(start, finish);
+    return merged;
+  };
+
+  auto merged_cycles = [](const auto& spans) {
+    uint64_t total = 0;
+    for (const auto& span : spans) {
+      total += span.second - span.first;
+    }
+    return total;
+  };
+
+  auto accumulate_idle_episode_histogram = [this](
+      const auto& active_spans, std::map<uint64_t, uint64_t>& histogram) {
+    cycle_type cursor = 0;
+    for (const auto& span : active_spans) {
+      if (cursor < span.first) {
+        histogram[span.first - cursor]++;
+      }
+      cursor = MAX(cursor, span.second);
+    }
+    if (cursor < _core_cycle) {
+      histogram[_core_cycle - cursor]++;
+    }
+  };
+
+  auto histogram_json = [](const std::map<uint64_t, uint64_t>& histogram) {
+    json result = json::array();
+    for (const auto& [length, count] : histogram) {
+      result.push_back(
+          json{{"length_cycles", length}, {"episode_count", count}});
+    }
+    return result;
+  };
+
+  auto histogram_episode_count = [](const auto& histogram) {
+    uint64_t count = 0;
+    for (const auto& [length, occurrences] : histogram) {
+      (void)length;
+      count += occurrences;
+    }
+    return count;
+  };
+
+  auto histogram_cycle_count = [](const auto& histogram) {
+    uint64_t cycles = 0;
+    for (const auto& [length, occurrences] : histogram) {
+      cycles += length * occurrences;
+    }
+    return cycles;
+  };
+
+  std::vector<std::pair<cycle_type, cycle_type>> whole_active_spans;
+  std::vector<std::pair<cycle_type, cycle_type>> whole_committed_spans;
+  whole_active_spans.reserve(_sa_region_intervals.size());
+  whole_committed_spans.reserve(_sa_region_intervals.size());
+  uint64_t invalid_dimension_intervals = 0;
+  uint64_t clipped_dimension_intervals = 0;
+  uint64_t modeled_useful_mac_count = 0;
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    whole_active_spans.emplace_back(interval.start_cycle,
+                                    interval.finish_cycle);
+    whole_committed_spans.emplace_back(interval.issue_cycle,
+                                       interval.finish_cycle);
+    if (interval.tile_m == 0 || interval.tile_k == 0 ||
+        interval.tile_n == 0) {
+      invalid_dimension_intervals++;
+    }
+    if (interval.tile_m > array_rows || interval.tile_k > array_columns) {
+      clipped_dimension_intervals++;
+    }
+    modeled_useful_mac_count +=
+        static_cast<uint64_t>(interval.tile_m) * interval.tile_k *
+        interval.tile_n;
+  }
+  const auto merged_whole_active_spans =
+      merge_spans(std::move(whole_active_spans));
+  const uint64_t whole_sa_active_cycles =
+      merged_cycles(merged_whole_active_spans);
+  const uint64_t whole_sa_idle_cycles =
+      _core_cycle - whole_sa_active_cycles;
+  const auto merged_whole_committed_spans =
+      merge_spans(std::move(whole_committed_spans));
+  const uint64_t whole_sa_committed_cycles =
+      merged_cycles(merged_whole_committed_spans);
+  const uint64_t whole_sa_uncommitted_cycles =
+      _core_cycle - whole_sa_committed_cycles;
+  std::map<uint64_t, uint64_t> whole_sa_idle_episode_histogram;
+  accumulate_idle_episode_histogram(
+      merged_whole_active_spans, whole_sa_idle_episode_histogram);
+  const uint64_t whole_sa_idle_episode_count =
+      histogram_episode_count(whole_sa_idle_episode_histogram);
+  const uint64_t whole_sa_idle_episode_cycles =
+      histogram_cycle_count(whole_sa_idle_episode_histogram);
+
+  std::vector<sa_pe_state::Interval> pe_state_intervals;
+  pe_state_intervals.reserve(_sa_region_intervals.size());
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    pe_state_intervals.push_back(sa_pe_state::Interval{
+        .start_cycle = interval.start_cycle,
+        .finish_cycle = interval.finish_cycle,
+        .tile_m = interval.tile_m,
+        .tile_k = interval.tile_k,
+        .tile_n = interval.tile_n});
+  }
+  const sa_pe_state::Result pe_state = sa_pe_state::derive(
+      pe_state_intervals, array_rows, array_columns, _core_cycle,
+      whole_sa_active_cycles);
+
+  std::vector<sa_pe_state::WaveInterval> wave_intervals;
+  wave_intervals.reserve(_sa_region_intervals.size());
+  for (const SaRegionInterval& interval : _sa_region_intervals) {
+    wave_intervals.push_back(sa_pe_state::WaveInterval{
+        .issue_cycle = interval.issue_cycle,
+        .start_cycle = interval.start_cycle,
+        .finish_cycle = interval.finish_cycle,
+        .tile_m = interval.tile_m,
+        .tile_k = interval.tile_k,
+        .tile_n = interval.tile_n,
+        .opcode = interval.opcode == Opcode::GEMM_PRELOAD
+            ? sa_pe_state::WaveOpcode::PRELOAD
+            : sa_pe_state::WaveOpcode::GEMM,
+        .weight_block_id = interval.weight_block_id,
+        .weight_block_known = interval.weight_block_known});
+  }
+  const sa_pe_state::WaveLifetimeResult wave_lifetime =
+      sa_pe_state::derive_wave_lifetime(
+          wave_intervals, array_rows, array_columns, _core_cycle,
+          whole_sa_active_cycles);
+  json weight_lifetimes = json::array();
+  for (const auto& lifetime : wave_lifetime.weight_lifetimes) {
+    weight_lifetimes.push_back(json{
+        {"start_cycle", lifetime.start_cycle},
+        {"finish_cycle", lifetime.finish_cycle},
+        {"rows", lifetime.rows},
+        {"columns", lifetime.columns},
+        {"weight_block_id", lifetime.weight_block_id},
+        {"consumer_instructions", lifetime.consumer_instructions}});
+  }
+
+  json pe_state_interval_classes = json::array();
+  for (const auto& item : pe_state.interval_classes) {
+    pe_state_interval_classes.push_back(json{
+        {"duration_cycles", item.duration_cycles},
+        {"tile_m", item.tile_m},
+        {"tile_k", item.tile_k},
+        {"tile_n", item.tile_n},
+        {"occurrences", item.occurrences},
+        {"on_compute_pe_cycles_per_interval",
+         item.on_compute_pe_cycles_per_interval},
+        {"resident_weight_pe_cycles_per_interval",
+         item.resident_weight_pe_cycles_per_interval},
+        {"w_on_candidate_pe_cycles_per_interval",
+         item.w_on_candidate_pe_cycles_per_interval},
+        {"off_unmapped_candidate_pe_cycles_per_interval",
+         item.off_unmapped_candidate_pe_cycles_per_interval}});
+  }
+
+  json granularities = json::array();
+  bool all_accounting_exact = true;
+  for (uint32_t region_size : _sa_region_sizes) {
+    const sa_pe_state::RegionStateResult analytical_region =
+        sa_pe_state::derive_region_states(
+            wave_intervals, wave_lifetime, array_rows, array_columns,
+            region_size, region_size, _core_cycle);
+    const uint32_t region_rows = ceil_div(array_rows, region_size);
+    const uint32_t region_columns = ceil_div(array_columns, region_size);
+    const uint64_t region_count =
+        static_cast<uint64_t>(region_rows) * region_columns;
+    std::vector<uint64_t> per_region_active_cycles;
+    std::vector<uint64_t> per_region_reserved_cycles;
+    per_region_active_cycles.reserve(region_count);
+    per_region_reserved_cycles.reserve(region_count);
+    uint64_t active_region_cycles = 0;
+    uint64_t reserved_region_cycles = 0;
+    std::map<uint64_t, uint64_t> idle_episode_histogram;
+
+    for (uint32_t region_row = 0; region_row < region_rows; ++region_row) {
+      const uint32_t row_start = region_row * region_size;
+      for (uint32_t region_column = 0;
+           region_column < region_columns; ++region_column) {
+        const uint32_t column_start = region_column * region_size;
+        std::vector<std::pair<cycle_type, cycle_type>> active_spans;
+        std::vector<std::pair<cycle_type, cycle_type>> reserved_spans;
+        for (const SaRegionInterval& interval : _sa_region_intervals) {
+          const uint32_t used_rows = MIN(interval.tile_m, array_rows);
+          const uint32_t used_columns = MIN(interval.tile_k, array_columns);
+          if (used_rows != 0 && used_columns != 0 &&
+              row_start < used_rows && column_start < used_columns) {
+            active_spans.emplace_back(interval.start_cycle,
+                                      interval.finish_cycle);
+            reserved_spans.emplace_back(interval.issue_cycle,
+                                        interval.finish_cycle);
+          }
+        }
+        const auto merged_active_spans =
+            merge_spans(std::move(active_spans));
+        const auto merged_reserved_spans =
+            merge_spans(std::move(reserved_spans));
+        const uint64_t region_active =
+            merged_cycles(merged_active_spans);
+        const uint64_t region_reserved =
+            merged_cycles(merged_reserved_spans);
+        accumulate_idle_episode_histogram(
+            merged_active_spans, idle_episode_histogram);
+        per_region_active_cycles.push_back(region_active);
+        per_region_reserved_cycles.push_back(region_reserved);
+        active_region_cycles += region_active;
+        reserved_region_cycles += region_reserved;
+      }
+    }
+
+    const uint64_t capacity_region_cycles = region_count * _core_cycle;
+    const uint64_t temporal_idle_region_cycles =
+        region_count * whole_sa_idle_cycles;
+    const uint64_t whole_active_capacity =
+        region_count * whole_sa_active_cycles;
+    const uint64_t spatial_idle_region_cycles =
+        whole_active_capacity - active_region_cycles;
+    const uint64_t total_idle_region_cycles =
+        capacity_region_cycles - active_region_cycles;
+    const uint64_t conservative_available_region_cycles =
+        capacity_region_cycles - reserved_region_cycles;
+    const uint64_t conservative_temporally_uncommitted_region_cycles =
+        region_count * whole_sa_uncommitted_cycles;
+    const uint64_t committed_capacity =
+        region_count * whole_sa_committed_cycles;
+    const uint64_t conservative_spatially_available_region_cycles =
+        committed_capacity - reserved_region_cycles;
+    const uint64_t idle_episode_count =
+        histogram_episode_count(idle_episode_histogram);
+    const uint64_t idle_episode_cycles =
+        histogram_cycle_count(idle_episode_histogram);
+    const bool accounting_exact =
+        total_idle_region_cycles ==
+            temporal_idle_region_cycles + spatial_idle_region_cycles &&
+        idle_episode_cycles == total_idle_region_cycles &&
+        active_region_cycles <= whole_active_capacity &&
+        conservative_available_region_cycles ==
+            conservative_temporally_uncommitted_region_cycles +
+                conservative_spatially_available_region_cycles &&
+        reserved_region_cycles <= committed_capacity;
+    all_accounting_exact = all_accounting_exact && accounting_exact;
+
+    auto percent = [](uint64_t numerator, uint64_t denominator) {
+      return denominator == 0
+          ? 0.0
+          : 100.0 * static_cast<double>(numerator) /
+                static_cast<double>(denominator);
+    };
+    granularities.push_back(json{
+        {"region_size_rows", region_size},
+        {"region_size_columns", region_size},
+        {"region_rows", region_rows},
+        {"region_columns", region_columns},
+        {"region_count", region_count},
+        {"capacity_region_cycles", capacity_region_cycles},
+        {"modeled_active_region_cycles", active_region_cycles},
+        {"modeled_idle_region_cycles", total_idle_region_cycles},
+        {"modeled_active_region_percent",
+         percent(active_region_cycles, capacity_region_cycles)},
+        {"modeled_idle_region_percent",
+         percent(total_idle_region_cycles, capacity_region_cycles)},
+        {"temporally_idle_region_cycles", temporal_idle_region_cycles},
+        {"spatially_idle_region_cycles_during_sa_active",
+         spatial_idle_region_cycles},
+        {"spatially_idle_percent_during_sa_active",
+         percent(spatial_idle_region_cycles, whole_active_capacity)},
+        {"per_region_modeled_active_cycles", per_region_active_cycles},
+        {"idle_episode_count", idle_episode_count},
+        {"idle_episode_cycles", idle_episode_cycles},
+        {"shortest_idle_episode_cycles",
+         idle_episode_histogram.empty()
+             ? 0
+             : idle_episode_histogram.begin()->first},
+        {"longest_idle_episode_cycles",
+         idle_episode_histogram.empty()
+             ? 0
+             : idle_episode_histogram.rbegin()->first},
+        {"average_idle_episode_cycles",
+         idle_episode_count == 0
+             ? 0.0
+             : static_cast<double>(idle_episode_cycles) /
+                   static_cast<double>(idle_episode_count)},
+        {"idle_episode_length_histogram",
+         histogram_json(idle_episode_histogram)},
+        {"conservative_reserved_region_cycles", reserved_region_cycles},
+        {"conservative_available_region_cycles",
+         conservative_available_region_cycles},
+        {"conservative_available_region_percent",
+         percent(conservative_available_region_cycles,
+                 capacity_region_cycles)},
+        {"conservative_temporally_uncommitted_region_cycles",
+         conservative_temporally_uncommitted_region_cycles},
+        {"conservative_spatially_available_region_cycles_during_commitment",
+         conservative_spatially_available_region_cycles},
+        {"conservative_spatially_available_percent_during_commitment",
+         percent(conservative_spatially_available_region_cycles,
+                 committed_capacity)},
+        {"per_region_conservative_reserved_cycles",
+         per_region_reserved_cycles},
+        {"regate_analytical_wave",
+         json{
+             {"evidence_class", "derived"},
+             {"power_domain_rule",
+              "ON if any PE in the region has a useful MAC; otherwise W_on "
+              "if any compiler-live stationary weight intersects the region; "
+              "otherwise structural OFF candidate"},
+             {"analytical_on_region_cycles",
+              analytical_region.analytical_on_region_cycles},
+             {"analytical_w_on_region_cycles",
+              analytical_region.analytical_w_on_region_cycles},
+             {"structural_off_candidate_region_cycles",
+              analytical_region.analytical_off_region_cycles},
+             {"preload_committed_unclassified_region_cycles",
+              analytical_region.unclassified_region_cycles},
+             {"capacity_region_cycles",
+              analytical_region.capacity_region_cycles},
+             {"per_region_on_cycles",
+              analytical_region.per_region_on_cycles},
+             {"per_region_w_on_cycles",
+              analytical_region.per_region_w_on_cycles},
+             {"per_region_structural_off_candidate_cycles",
+              analytical_region.per_region_off_cycles},
+             {"partition_exact_under_model",
+              analytical_region.state_accounting_exact}}},
+        {"accounting_exact", accounting_exact}});
+  }
+
+  const bool baseline_active_match =
+      whole_sa_active_cycles == _stat_tot_systolic_active_cycle;
+  const bool validation_pass =
+      invalid_dimension_intervals == 0 &&
+      clipped_dimension_intervals == 0 && baseline_active_match &&
+      whole_sa_idle_episode_cycles == whole_sa_idle_cycles &&
+      all_accounting_exact && pe_state.accounting_exact;
+  json record{
+      {"version", 6},
+      {"core_id", _id},
+      {"measurement_only", true},
+      {"control_path_modified", false},
+      {"array_rows", array_rows},
+      {"array_columns", array_columns},
+      {"core_cycles", _core_cycle},
+      {"sa_instruction_intervals", _sa_region_intervals.size()},
+      {"modeled_useful_mac_count", modeled_useful_mac_count},
+      {"invalid_dimension_intervals", invalid_dimension_intervals},
+      {"clipped_dimension_intervals", clipped_dimension_intervals},
+      {"whole_sa_active_cycles", whole_sa_active_cycles},
+      {"whole_sa_idle_cycles", whole_sa_idle_cycles},
+      {"whole_sa_idle_episode_count", whole_sa_idle_episode_count},
+      {"whole_sa_idle_episode_cycles", whole_sa_idle_episode_cycles},
+      {"whole_sa_shortest_idle_episode_cycles",
+       whole_sa_idle_episode_histogram.empty()
+           ? 0
+           : whole_sa_idle_episode_histogram.begin()->first},
+      {"whole_sa_longest_idle_episode_cycles",
+       whole_sa_idle_episode_histogram.empty()
+           ? 0
+           : whole_sa_idle_episode_histogram.rbegin()->first},
+      {"whole_sa_average_idle_episode_cycles",
+       whole_sa_idle_episode_count == 0
+           ? 0.0
+           : static_cast<double>(whole_sa_idle_episode_cycles) /
+                 static_cast<double>(whole_sa_idle_episode_count)},
+      {"whole_sa_idle_episode_length_histogram",
+       histogram_json(whole_sa_idle_episode_histogram)},
+      {"whole_sa_committed_cycles", whole_sa_committed_cycles},
+      {"whole_sa_uncommitted_cycles", whole_sa_uncommitted_cycles},
+      {"baseline_sa_active_cycles", _stat_tot_systolic_active_cycle},
+      {"baseline_active_match", baseline_active_match},
+      {"pe_state_opportunity",
+       json{
+           {"evidence_class", "derived"},
+           {"model", "packed-footprint structural opportunity approximation"},
+           {"completed_intervals", pe_state.completed_intervals},
+           {"incomplete_intervals", pe_state.incomplete_intervals},
+           {"invalid_dimension_intervals",
+            pe_state.invalid_dimension_intervals},
+           {"insufficient_duration_intervals",
+            pe_state.insufficient_duration_intervals},
+           {"union_active_cycles", pe_state.union_active_cycles},
+           {"active_capacity_pe_cycles",
+            pe_state.active_capacity_pe_cycles},
+           {"on_compute_pe_cycles", pe_state.on_compute_pe_cycles},
+           {"resident_weight_pe_cycles",
+            pe_state.resident_weight_pe_cycles},
+           {"w_on_candidate_pe_cycles",
+            pe_state.w_on_candidate_pe_cycles},
+           {"off_unmapped_candidate_pe_cycles",
+            pe_state.off_unmapped_candidate_pe_cycles},
+           {"temporal_idle_unclassified_pe_cycles",
+            pe_state.temporal_idle_unclassified_pe_cycles},
+           {"total_capacity_pe_cycles",
+            pe_state.total_capacity_pe_cycles},
+           {"on_within_resident_capacity",
+            pe_state.on_within_resident_capacity},
+           {"resident_within_active_capacity",
+            pe_state.resident_within_active_capacity},
+           {"accounting_exact", pe_state.accounting_exact},
+           {"accounting_exact_semantics",
+            "Arithmetic partition is exact under the stated origin-packed "
+            "footprint and aggregate useful-MAC assumptions; it is not an "
+            "exact functional ReGate state trace."},
+           {"interval_classes", pe_state_interval_classes},
+           {"equations",
+            json{
+                {"per_interval_on_compute",
+                 "tile_m * tile_k * tile_n"},
+                {"resident_weight_union",
+                 "integral over merged [start,finish) intervals of the union "
+                 "of origin-packed tile_m-by-tile_k footprints"},
+                {"w_on_candidate",
+                 "resident_weight_pe_cycles - on_compute_pe_cycles"},
+                {"off_unmapped_candidate",
+                 "array_area * whole_sa_active_cycles - "
+                 "resident_weight_pe_cycles"},
+                {"temporal_idle_unclassified",
+                 "array_area * whole_sa_idle_cycles"}}},
+           {"semantics",
+            "The aggregate useful-work count assigns tile_n MACs per mapped "
+            "PE. The remaining mapped capacity is only a W_on opportunity "
+            "upper candidate, and unmapped capacity during merged SA-active "
+            "time is only an OFF candidate; no physical per-cycle PE state "
+            "trace is reconstructed."},
+           {"dimension_mapping",
+            "For ONNXim GEMM/GEMM_PRELOAD metadata, tile_n is the number "
+            "of streamed input rows/waves (ReGate M), tile_k is the "
+            "reduction dimension (ReGate K), and tile_m is the number of "
+            "output channels/stationary-weight rows (ReGate N). The packed "
+            "physical footprint follows ONNXim's existing tile_m-by-tile_k "
+            "region convention."},
+           {"classification_strength",
+            "Derived structural candidate accounting, not an artifact-"
+            "equivalent or measured ON/W_on/OFF state trace."},
+           {"model_assumptions",
+            json::array({
+                "one useful MAC occupies one mapped PE for one cycle",
+                "each mapped stationary weight is used by tile_n input waves",
+                "tile footprints are origin-packed as in the existing "
+                "ONNXim region profiler",
+                "numerical value sparsity is not inspected",
+                "overlapping instruction footprints are unioned before "
+                "resident and unmapped capacity is calculated"})},
+           {"interval_class_semantics",
+            "Interval classes expose the per-instruction derivation grouped "
+            "by equal dimensions and duration. They are not additive physical "
+            "time when instruction windows overlap; the top-level unioned "
+            "fields are the physical-time accounting."},
+           {"pre_start_semantics",
+            "The [issue_cycle,start_cycle) interval is not classified as "
+            "OFF; it remains available only in the separately reported "
+            "committed/reserved accounting."},
+           {"temporal_idle_semantics",
+            "Whole-SA idle PE-cycles are deliberately unclassified: this "
+            "profile alone does not prove whether resident weights are live "
+            "and require W_on/retention or are dead and permit OFF."},
+           {"not_claimed",
+            "No per-cycle PE_on trace, energy, voltage, entry/wake latency, "
+            "transition cost, BET, scheduling effect, row/column zero "
+            "detection, prefix forwarding, diagonal PE_on propagation, or "
+            "functional ReGate state transition is modeled."}}},
+      {"regate_analytical_wave_lifetime",
+       json{
+           {"evidence_class", "derived"},
+           {"model",
+            "analytical origin-packed WS wave plus compiler-visible exact "
+            "weight-block lifetime"},
+           {"schedule_equation", "local_cycle = row + column + wave"},
+           {"useful_mac_equation",
+            "U(t) is the coefficient of "
+            "(1+x+...+x^(tile_m-1))*(1+x+...+x^(tile_k-1))*"
+            "(1+x+...+x^(tile_n-1))"},
+           {"analytical_on_pe_cycles",
+            wave_lifetime.analytical_on_pe_cycles},
+           {"simulator_active_capacity_pe_cycles",
+            wave_lifetime.simulator_active_capacity_pe_cycles},
+           {"simulator_active_non_wave_pe_cycles",
+            wave_lifetime.simulator_active_non_wave_pe_cycles},
+           {"resident_weight_pe_cycles",
+            wave_lifetime.resident_weight_pe_cycles},
+           {"pre_start_committed_pe_cycles",
+            wave_lifetime.pre_start_committed_pe_cycles},
+           {"analytical_w_on_pe_cycles",
+            wave_lifetime.analytical_w_on_pe_cycles},
+           {"structural_off_candidate_pe_cycles",
+            wave_lifetime.analytical_off_pe_cycles},
+           {"unclassified_pe_cycles",
+            wave_lifetime.unclassified_pe_cycles},
+           {"total_capacity_pe_cycles",
+            wave_lifetime.total_capacity_pe_cycles},
+           {"completed_intervals", wave_lifetime.completed_intervals},
+           {"incomplete_intervals", wave_lifetime.incomplete_intervals},
+           {"invalid_dimension_intervals",
+            wave_lifetime.invalid_dimension_intervals},
+           {"wave_exceeds_instruction_intervals",
+            wave_lifetime.wave_exceeds_instruction_intervals},
+           {"overlapping_wave_intervals",
+            wave_lifetime.overlapping_wave_intervals},
+           {"unknown_weight_block_intervals",
+            wave_lifetime.unknown_weight_block_intervals},
+           {"gemm_without_preload_intervals",
+            wave_lifetime.gemm_without_preload_intervals},
+           {"weight_block_mismatch_intervals",
+            wave_lifetime.weight_block_mismatch_intervals},
+           {"footprint_mismatch_intervals",
+            wave_lifetime.footprint_mismatch_intervals},
+           {"wave_overlap_free", wave_lifetime.wave_overlap_free},
+           {"weight_lifetime_complete",
+            wave_lifetime.weight_lifetime_complete},
+           {"partition_exact_under_model",
+            wave_lifetime.state_accounting_exact},
+           {"weight_lifetimes", weight_lifetimes},
+           {"atomic_preload_approximation",
+            "The complete mapped weight footprint becomes valid at the "
+            "ONNXim instruction start cycle. ONNXim does not expose "
+            "wire-by-wire preload movement."},
+           {"pre_start_semantics",
+            "Mapped [issue_cycle,start_cycle) capacity is committed and "
+            "unclassified; it is never silently called OFF or W_on."},
+           {"off_semantics",
+            "OFF is a structural candidate under an offline exact-liveness "
+            "oracle: no useful MAC, no compiler-live weight footprint, and "
+            "no unresolved preload commitment. It is not a generated or "
+            "measured ReGate control signal."},
+           {"duration_semantics",
+            "The useful analytical wave uses mapped tile dimensions. Extra "
+            "cycles in ONNXim's full-array instruction duration remain "
+            "visible as simulator_active_non_wave_pe_cycles."},
+           {"not_energy_result", true}}},
+      {"granularities", granularities},
+      {"validation_pass", validation_pass},
+      {"footprint_semantics",
+       "tile_m-by-tile_k stationary-operand footprint packed from the "
+       "array origin; modeled spatial utilization uses "
+       "[start_cycle,finish_cycle)"},
+      {"active_interval_semantics",
+       "[start_cycle,finish_cycle) reproduces ONNXim's existing whole-SA "
+       "active-cycle count, so whole-array modeled idle equals the baseline"},
+      {"conservative_interval_semantics",
+       "[issue_cycle,finish_cycle) is reported separately as a policy "
+       "reservation bound; ONNXim does not expose internal PE activity "
+       "during the pre-start interval"},
+      {"overlap_semantics",
+       "per-region interval union; overlapping pipelined instructions are "
+       "counted active once"},
+      {"limitation",
+       "ONNXim does not model individual PE wavefront activity or ReGate's "
+       "row/column zero detection, prefix forwarding, and diagonal PE_on "
+       "propagation; spatial candidates are not cycle-accurate multiplier "
+       "or power-state traces"},
+      {"regate_input_semantics",
+       "modeled_useful_mac_count is the sum of tile_m*tile_k*tile_n over "
+       "issued GEMM and GEMM_PRELOAD instructions; it is an architectural "
+       "work count, not a measured PE activation trace"}};
+  spdlog::info("SA_REGION_PROFILE {}", record.dump());
+}
+
 void SystolicWS::print_stats() {
   Core::print_stats();
+  emit_regate_functional_profile();
+  emit_regate_two_bank_profile();
+  emit_sa_region_profile();
   spdlog::info("Core [{}] : Systolic Inst Issue Count : {}", _id,
                _stat_systolic_inst_issue_count);
   spdlog::info("Core [{}] : Systolic PRELOAD Issue Count : {}", _id,
                _stat_systolic_preload_issue_count);
+
+  if (_retention_shadow_enabled) {
+    close_retention_shadow_episode(true);
+    auto percent = [&](uint64_t cycles) {
+      return _core_cycle == 0
+          ? 0.0
+          : 100.0 * static_cast<double>(cycles) /
+                static_cast<double>(_core_cycle);
+    };
+    json duration_histogram = json::object();
+    for (const auto& [duration, count] :
+         _retention_shadow_duration_histogram) {
+      duration_histogram[std::to_string(duration)] = count;
+    }
+    json entry_bound_histogram = json::object();
+    for (const auto& [bound, count] :
+         _retention_shadow_entry_bound_histogram) {
+      entry_bound_histogram[std::to_string(bound)] = count;
+    }
+    json entry_threshold_sweep = json::object();
+    for (size_t index = 0;
+         index < RETENTION_ENTRY_THRESHOLDS.size(); ++index) {
+      entry_threshold_sweep[
+          std::to_string(RETENTION_ENTRY_THRESHOLDS[index])] = {
+          {"entry_qualified_episode_count",
+           _retention_shadow_threshold_episode_count[index]},
+          {"observed_retention_cycles",
+           _retention_shadow_threshold_cycle_count[index]},
+          {"episodes_shorter_than_threshold",
+           _retention_shadow_threshold_early_exit_count[index]},
+          {"right_censored_episodes",
+           _retention_shadow_threshold_right_censored_count[index]}};
+    }
+    json record{
+        {"version", 2},
+        {"core_id", _id},
+        {"core_cycles", _core_cycle},
+        {"measurement_only", true},
+        {"control_path_modified", false},
+        {"zero_wake_latency_assumption", true},
+        {"break_even_filter_applied", false},
+        {"entry_pipeline_applied", false},
+        {"ordinary_gemm_retention_allowed", true},
+        {"two_resident_candidate_requirement", false},
+        {"minimum_causal_bound_cycles", 1},
+        {"sa_idle_cycles", _retention_shadow_sa_idle_cycles},
+        {"retention_cycles", _retention_shadow_cycles},
+        {"retention_percent", percent(_retention_shadow_cycles)},
+        {"retention_percent_of_sa_idle",
+         _retention_shadow_sa_idle_cycles == 0
+             ? 0.0
+             : 100.0 *
+                   static_cast<double>(_retention_shadow_cycles) /
+                   static_cast<double>(
+                       _retention_shadow_sa_idle_cycles)},
+        {"episode_count", _retention_shadow_episode_count},
+        {"longest_episode", _retention_shadow_longest_episode},
+        {"state_reuse_episode_count",
+         _retention_shadow_reuse_episode_count},
+        {"preload_only_episode_count",
+         _retention_shadow_preload_only_episode_count},
+        {"unknown_future_episode_count",
+         _retention_shadow_unknown_future_episode_count},
+        {"immediate_wake_events",
+         _retention_shadow_immediate_wake_events},
+        {"causal_deadline_violations",
+         _retention_shadow_causal_deadline_violations},
+        {"right_censored_episodes",
+         _retention_shadow_right_censored_episodes},
+        {"episode_duration_histogram", duration_histogram},
+        {"entry_bound_histogram", entry_bound_histogram},
+        {"entry_threshold_sweep", entry_threshold_sweep},
+        {"threshold_sweep_semantics",
+         "episodes selected causally by the bound available at entry; "
+         "observed durations include early invalidation and right-censored "
+         "episodes"},
+        {"entry_semantics",
+         "actual SA completion followed by a positive causal lower bound"},
+        {"retained_state_semantics",
+         "all PE state required by a subsequent ordinary GEMM"}};
+    spdlog::info("SA_RETENTION_SHADOW {}", record.dump());
+  }
 
   if (_sa_state_measure) {
     constexpr std::array<const char*,

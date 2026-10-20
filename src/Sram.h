@@ -26,7 +26,15 @@ class Sram {
   bool check_allocated(addr_type address, int buffer_id);
   EntryState get_entry_state(addr_type address, int buffer_id) const;
 
-  void cycle();
+  bool cycle();
+  void record_modeled_read(addr_type address, int buffer_id,
+                           uint64_t access_count = 1);
+  uint64_t modeled_cycles() const { return _modeled_cycles; }
+  uint64_t modeled_idle_cycles() const { return _modeled_idle_cycles; }
+  uint64_t modeled_read_active_cycles() const { return _modeled_read_active_cycles; }
+  uint64_t modeled_write_active_cycles() const { return _modeled_write_active_cycles; }
+  uint64_t modeled_read_events() const { return _modeled_read_events; }
+  uint64_t modeled_write_events() const { return _modeled_write_events; }
   void flush(int buffer_id);
   int prefetch(addr_type address, int buffer_id, size_t allocated_size, size_t count,
                PendingProducer pending_producer,
@@ -52,6 +60,14 @@ class Sram {
   int _data_width;
   int _current_size[2];
   bool _accum;
+  uint64_t _reads_this_cycle = 0;
+  uint64_t _writes_this_cycle = 0;
+  uint64_t _modeled_cycles = 0;
+  uint64_t _modeled_idle_cycles = 0;
+  uint64_t _modeled_read_active_cycles = 0;
+  uint64_t _modeled_write_active_cycles = 0;
+  uint64_t _modeled_read_events = 0;
+  uint64_t _modeled_write_events = 0;
 
   const cycle_type& _core_cycle;
 

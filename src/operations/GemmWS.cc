@@ -107,6 +107,28 @@ void GemmWS::initialize_instructions(Tile* tile, Mapping mapping) {
   third_addr = get_operand_addr(_INPUT_OPERAND+2);
   output_addr = get_operand_addr(_OUTPUT_OPERAND);
 
+  auto weight_block_id = [&](int m_offset, int m_count,
+                             int c_offset, int c_count) {
+    std::set<addr_type> addresses;
+    const int elems_per_access =
+        _config.dram_req_size / _config.precision;
+    for (int m_iter = 0; m_iter < m_count; ++m_iter) {
+      for (int c_iter = 0; c_iter < c_count;
+           c_iter += elems_per_access) {
+        int M = m_offset + m_iter;
+        int C = c_offset + c_iter;
+        std::vector<uint32_t> shape{_weight_shape[Mdim],
+                                    _weight_shape[Cdim_w]};
+        addresses.insert(second_addr + make_address(
+            {static_cast<uint32_t>(M), static_cast<uint32_t>(C)}, shape));
+      }
+    }
+    std::vector<addr_type> exact_addresses(addresses.begin(), addresses.end());
+    return intern_sa_weight_block(exact_addresses,
+                                  static_cast<uint32_t>(m_count),
+                                  static_cast<uint32_t>(c_count));
+  };
+
   int loop_size = _config.core_config[target_core].core_height;
   int cloop_size = mapping.tile_in_loop.C;
   for (int Ms = 0; Ms < mapping.tile_in_loop.M; Ms += loop_size) {
@@ -236,6 +258,8 @@ void GemmWS::initialize_instructions(Tile* tile, Mapping mapping) {
             (Ns * mapping.tile_in_loop.M + Ms) * _config.precision;
         for(int c_iter = 0; c_iter < c_in_loop; c_iter+=_config.core_config[target_core].core_height) {
           int c_iter_size = c_in_loop - c_iter > _config.core_config[target_core].core_height ? _config.core_config[target_core].core_height : c_in_loop - c_iter;
+          uint64_t block_id = weight_block_id(
+              M_offset, m_loop, C_offset + c_iter, c_iter_size);
           auto inst = std::make_unique<Instruction>(Instruction{
             .opcode = Opcode::GEMM_PRELOAD,
             .dest_addr = out_sp_addr,
@@ -244,7 +268,9 @@ void GemmWS::initialize_instructions(Tile* tile, Mapping mapping) {
             .src_addrs = std::vector<addr_type>{act_sp_addr, weight_sp_addr},
             .tile_m = static_cast<unsigned int>(m_loop),
             .tile_k = static_cast<unsigned int>(c_iter_size),
-            .tile_n = static_cast<unsigned int>(n_loop)
+            .tile_n = static_cast<unsigned int>(n_loop),
+            .sa_weight_block_id = block_id,
+            .sa_weight_block_known = block_id != 0
           });
         tile->instructions.push_back(std::move(inst));
         }

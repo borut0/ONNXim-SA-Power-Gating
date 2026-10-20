@@ -1,0 +1,171 @@
+{
+  "array_columns": 128,
+  "array_rows": 128,
+  "full_sa": {
+    "break_even_compensated_cycles": 2794699,
+    "break_even_cycles": 469,
+    "granularity": "128x128",
+    "idle_episode_count": 727,
+    "power_on_off_delay_cycles": 10,
+    "qualification_rule": "episode_length > max(469, 2*10)",
+    "qualifying_episode_count": 376,
+    "qualifying_episode_percent": 51.71939477303989,
+    "qualifying_idle_cycle_coverage_percent": 96.46384443928564,
+    "qualifying_idle_cycles": 2971043,
+    "qualifying_idle_cycles_percent_of_capacity": 70.79400125430571,
+    "raw_idle_percent": 73.38915597425051,
+    "region_count_per_core": 1,
+    "upper_bound_net_static_gain_percent": 66.5920770959582
+  },
+  "intermediate_region_sensitivity": [
+    {
+      "full_sa_reference_469_cycle_case": {
+        "break_even_compensated_cycles": 786843000,
+        "break_even_cycles": 469,
+        "idle_episode_count": 95505,
+        "power_on_off_delay_cycles": 10,
+        "qualification_rule": "episode_length > max(469, 2*10)",
+        "qualifying_episode_count": 81760,
+        "qualifying_episode_percent": 85.60808334642165,
+        "qualifying_idle_cycle_coverage_percent": 99.47422626471811,
+        "qualifying_idle_cycles": 825188440,
+        "qualifying_idle_cycles_percent_of_capacity": 76.80698045317989,
+        "upper_bound_net_static_gain_percent": 73.23785936788138
+      },
+      "pe_reference_47_cycle_case": {
+        "break_even_compensated_cycles": 825061261,
+        "break_even_cycles": 47,
+        "idle_episode_count": 95505,
+        "power_on_off_delay_cycles": 1,
+        "qualification_rule": "episode_length > max(47, 2*1)",
+        "qualifying_episode_count": 95505,
+        "qualifying_episode_percent": 100.0,
+        "qualifying_idle_cycle_coverage_percent": 100.0,
+        "qualifying_idle_cycles": 829549996,
+        "qualifying_idle_cycles_percent_of_capacity": 77.21294584265802,
+        "upper_bound_net_static_gain_percent": 76.79514287221832
+      },
+      "raw_idle_percent": 77.21294584265802,
+      "region_count_per_core": 256,
+      "region_size": "8x8"
+    },
+    {
+      "full_sa_reference_469_cycle_case": {
+        "break_even_compensated_cycles": 196231840,
+        "break_even_cycles": 469,
+        "idle_episode_count": 24493,
+        "power_on_off_delay_cycles": 10,
+        "qualification_rule": "episode_length > max(469, 2*10)",
+        "qualifying_episode_count": 20284,
+        "qualifying_episode_percent": 82.81549830563834,
+        "qualifying_idle_cycle_coverage_percent": 99.3587168503314,
+        "qualifying_idle_cycles": 205745036,
+        "qualifying_idle_cycles_percent_of_capacity": 76.60143643500771,
+        "upper_bound_net_static_gain_percent": 73.05955521709211
+      },
+      "pe_reference_47_cycle_case": {
+        "break_even_compensated_cycles": 205921789,
+        "break_even_cycles": 47,
+        "idle_episode_count": 24493,
+        "power_on_off_delay_cycles": 1,
+        "qualification_rule": "episode_length > max(47, 2*1)",
+        "qualifying_episode_count": 24493,
+        "qualifying_episode_percent": 100.0,
+        "qualifying_idle_cycle_coverage_percent": 100.0,
+        "qualifying_idle_cycles": 207072960,
+        "qualifying_idle_cycles_percent_of_capacity": 77.09583905999509,
+        "upper_bound_net_static_gain_percent": 76.66724377576998
+      },
+      "raw_idle_percent": 77.09583905999509,
+      "region_count_per_core": 64,
+      "region_size": "16x16"
+    },
+    {
+      "full_sa_reference_469_cycle_case": {
+        "break_even_compensated_cycles": 48871383,
+        "break_even_cycles": 469,
+        "idle_episode_count": 6363,
+        "power_on_off_delay_cycles": 10,
+        "qualification_rule": "episode_length > max(469, 2*10)",
+        "qualifying_episode_count": 4834,
+        "qualifying_episode_percent": 75.97045418827597,
+        "qualifying_idle_cycle_coverage_percent": 99.07254273507792,
+        "qualifying_idle_cycles": 51138529,
+        "qualifying_idle_cycles_percent_of_capacity": 76.15804210359269,
+        "upper_bound_net_static_gain_percent": 72.78169546438858
+      },
+      "pe_reference_47_cycle_case": {
+        "break_even_compensated_cycles": 51318196,
+        "break_even_cycles": 47,
+        "idle_episode_count": 6363,
+        "power_on_off_delay_cycles": 1,
+        "qualification_rule": "episode_length > max(47, 2*1)",
+        "qualifying_episode_count": 6363,
+        "qualifying_episode_percent": 100.0,
+        "qualifying_idle_cycle_coverage_percent": 100.0,
+        "qualifying_idle_cycles": 51617257,
+        "qualifying_idle_cycles_percent_of_capacity": 76.87098766329326,
+        "upper_bound_net_static_gain_percent": 76.42561114044602
+      },
+      "raw_idle_percent": 76.87098766329326,
+      "region_count_per_core": 16,
+      "region_size": "32x32"
+    },
+    {
+      "full_sa_reference_469_cycle_case": {
+        "break_even_compensated_cycles": 12198415,
+        "break_even_cycles": 469,
+        "idle_episode_count": 1612,
+        "power_on_off_delay_cycles": 10,
+        "qualification_rule": "episode_length > max(469, 2*10)",
+        "qualifying_episode_count": 1204,
+        "qualifying_episode_percent": 74.68982630272953,
+        "qualifying_idle_cycle_coverage_percent": 99.00662074420208,
+        "qualifying_idle_cycles": 12763091,
+        "qualifying_idle_cycles_percent_of_capacity": 76.02972089791514,
+        "upper_bound_net_static_gain_percent": 72.66594650519545
+      },
+      "pe_reference_47_cycle_case": {
+        "break_even_compensated_cycles": 12815385,
+        "break_even_cycles": 47,
+        "idle_episode_count": 1612,
+        "power_on_off_delay_cycles": 1,
+        "qualification_rule": "episode_length > max(47, 2*1)",
+        "qualifying_episode_count": 1612,
+        "qualifying_episode_percent": 100.0,
+        "qualifying_idle_cycle_coverage_percent": 100.0,
+        "qualifying_idle_cycles": 12891149,
+        "qualifying_idle_cycles_percent_of_capacity": 76.79256228161641,
+        "upper_bound_net_static_gain_percent": 76.34123620597302
+      },
+      "raw_idle_percent": 76.79256228161641,
+      "region_count_per_core": 4,
+      "region_size": "64x64"
+    }
+  ],
+  "interpretation": "Raw idle percent is the zero-overhead theoretical ceiling under ONNXim's packed stationary-footprint model. Qualifying coverage applies ReGate's strict delay/BET rule. Upper-bound net static gain subtracts one BET per accepted episode and assumes the maximum possible ON-to-OFF leakage reduction; it is not Joules and excludes controller, switch, isolation, routing, and residual OFF leakage. Intermediate-region results are sensitivity bounds only because Table 3 provides no 8x8/16x16/32x32 BETs.",
+  "pe_level": {
+    "break_even_compensated_cycles": 52837806839,
+    "break_even_cycles": 47,
+    "granularity": "1x1",
+    "idle_episode_count": 6046805,
+    "power_on_off_delay_cycles": 1,
+    "qualification_rule": "episode_length > max(47, 2*1)",
+    "qualifying_episode_count": 6046805,
+    "qualifying_episode_percent": 100.0,
+    "qualifying_idle_cycle_coverage_percent": 100.0,
+    "qualifying_idle_cycles": 53122006674,
+    "qualifying_idle_cycles_percent_of_capacity": 77.25774976174704,
+    "raw_idle_percent": 77.25774976174704,
+    "region_count_per_core": 16384,
+    "upper_bound_net_static_gain_percent": 76.84442501915017
+  },
+  "reference": {
+    "paper": "ReGate: Enabling Power Gating in Neural Processing Units",
+    "table": 3,
+    "venue": "MICRO 2025",
+    "warning": "ReGate parameters are reference sensitivity points, not measurements of this ONNXim/ASAP7 design."
+  },
+  "source_validation_pass": true,
+  "version": 1
+}

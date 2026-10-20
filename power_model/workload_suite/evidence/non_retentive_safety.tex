@@ -1,0 +1,94 @@
+\subsection{Non-Retentive Power-Gating Safety}
+\label{sec:nonretentive-safety}
+
+Power-gating the SA is non-retentive: values held in the processing-element
+registers are not assumed to survive an OFF interval.  Consequently, an idle
+interval alone is insufficient to authorize power gating.  The controller may
+enter the OFF state only when it has both (i) evidence that the SA cannot be
+needed before a certified deadline and (ii) evidence that losing the current
+SA-resident state cannot change subsequent execution.
+
+The second requirement follows from the weight-stationary instruction
+semantics.  A \texttt{GEMM} instruction consumes weights already resident in
+the SA and therefore cannot safely follow a non-retentive OFF interval.  A
+\texttt{GEMM\_PRELOAD} instruction reloads the required weights before their
+use.  Hence, for each of the two resident tile slots, the controller requires
+the earliest future SA instruction to exist and to be
+\texttt{GEMM\_PRELOAD}.  It also requires both resident slots to be occupied;
+the future-tile bound described in Sec.~\ref{sec:causal-predictor}
+limits the certificate to the earliest point at which a resident tile could
+retire and previously unseen work could enter.
+
+Table~\ref{tab:nonretentive-safety} summarizes the hazards checked by the
+implemented controller.  These conditions are conjunctive: failure of any
+entry condition suppresses a new OFF decision.
+
+\begin{table}[t]
+  \centering
+  \caption{Safety conditions for a non-retentive SA OFF interval.}
+  \label{tab:nonretentive-safety}
+  \begin{tabular}{p{0.31\columnwidth}p{0.61\columnwidth}}
+    \toprule
+    Hazard & Implemented protection \\
+    \midrule
+    Useful SA work is already active
+      & Require the SA to be inactive at every certificate stage and at
+        entry commit. \\
+    Committed work can reach the SA immediately
+      & Require both the compute pipeline and execution-instruction queue to
+        be empty. \\
+    OFF destroys resident weights
+      & Require the first future SA instruction in each resident tile to be
+        \texttt{GEMM\_PRELOAD}, not \texttt{GEMM}. \\
+    Unseen tile work arrives early
+      & Require two resident tiles and cap the horizon using resident
+        retirement and global work-drain information. \\
+    Queue-distance evidence is ambiguous
+      & Require exact memory-request tickets throughout certificate
+        generation and at entry commit. \\
+    Metadata changes after sampling
+      & A write to either resident descriptor invalidates the certificate;
+        a write during sleep forces wake-up. \\
+    A saved deadline becomes stale
+      & Freeze the committed deadline, decrement it monotonically, and never
+        recompute or extend it while asleep. \\
+    SA demand appears before the deadline
+      & Wake immediately if the SA becomes active, either queue becomes
+        nonempty, ticket exactness is lost, or the countdown reaches the
+        one-cycle guard. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Certificate construction is itself protected against stale observations.
+The implementation uses three registered evaluation stages.  A descriptor
+write, observed SA activity, a nonempty compute or execution queue, or loss of
+ticket exactness invalidates the certificate at the intervening stage
+boundaries.  The three elapsed evaluation cycles are deducted from the causal
+lower bound.  With the evaluated 166-cycle break-even threshold and one-cycle
+wake guard, a fresh bound must therefore be at least 170 cycles; after the
+three-stage deduction, entry commits only when at least 167 cycles remain.
+
+Once entry commits, the controller stores the certified remaining interval in
+a countdown register.  While OFF, the controller cannot increase this value;
+it either decrements the countdown or exits the OFF state.  This frozen-deadline
+rule is important because continuously recomputing a later deadline from new
+observations could incorrectly prolong an interval that was justified by an
+older machine state.
+
+We validate the decision logic by replaying each accepted architectural trace
+against both the reference controller and its clock-gated implementation.  A
+replay is accepted only when their emitted sleep episodes and summary records
+match exactly.  Independently, the replay testbench counts a safety violation
+whenever the controller requests sleep while the trace reports the SA active,
+and terminates with an error if this count is nonzero.  Thus, the validation
+establishes trace-level equivalence of the two controller implementations and
+the absence of sleep--activity overlap in an accepted replay.
+
+This validation has a deliberate scope.  The controller is evaluated in
+shadow replay and does not feed a physical OFF/ON transition back into
+ONNXim's scheduling or timing.  Therefore, unchanged workload cycle counts are
+not, by themselves, a measurement of zero wake-up penalty in an integrated
+power-gated NPU.  Device-level transition delay and energy are characterized
+separately, and an end-to-end implementation that stalls execution during a
+late wake-up would be required to measure any resulting performance penalty.

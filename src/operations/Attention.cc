@@ -288,6 +288,8 @@ void Attention::initialize_instructions(Tile* tile, int head_idx, int num_heads)
         }));
         // -- compute --
         // GEMM (q*k -> l)
+        const uint64_t query_key_block_id = intern_sa_weight_block(
+            key_addrs, seq_len, _dk);
         tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
             .opcode = Opcode::GEMM,
             .dest_addr = sram_l_ofs,
@@ -298,6 +300,9 @@ void Attention::initialize_instructions(Tile* tile, int head_idx, int num_heads)
             .tile_m = seq_len,
             .tile_k = _dk,
             .tile_n = q_len,
+            .sa_weight_block_id = query_key_block_id,
+            .sa_weight_block_known = query_key_block_id != 0,
+            .sa_analytical_preload_boundary = true,
         }));
         // Softmax (l -> l)
 
@@ -313,6 +318,8 @@ void Attention::initialize_instructions(Tile* tile, int head_idx, int num_heads)
 
         // [ ] change output offset
         // GEMM (l*v -> acc)
+        const uint64_t logits_value_block_id = intern_sa_weight_block(
+            value_addrs, _dk, seq_len);
         tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
             .opcode = Opcode::GEMM,
             .dest_addr = sram_l_ofs,
@@ -324,6 +331,9 @@ void Attention::initialize_instructions(Tile* tile, int head_idx, int num_heads)
             .tile_k = seq_len,
             .tile_n = q_len,
             .src_from_accum = true,
+            .sa_weight_block_id = logits_value_block_id,
+            .sa_weight_block_known = logits_value_block_id != 0,
+            .sa_analytical_preload_boundary = true,
         }));
 
         // MOVOUT
@@ -356,7 +366,8 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
     addr_type ouput_addr = get_operand_addr(_OUTPUT_OPERAND);
     addr_type logits_addr = get_operand_addr(_OUTPUT_OPERAND) + _dmodel * _q_len * _config.precision; // logits addr for scale
     assert(num_heads <= _nkvh);
-    int kv_head_idx = head_idx / _nkvh;
+    const int heads_per_kv = _nh / _nkvh;
+    int kv_head_idx = head_idx / heads_per_kv;
     addr_type sram_k_ofs = sram_key_base + kv_head_idx * (_dk * seq_len) * _config.precision;
     addr_type sram_v_ofs = sram_value_base + kv_head_idx * (_dk * seq_len) * _config.precision;
     std::set<addr_type> dram_kv_addrs;    // = _key[req_idx]->get_all_addrs();
@@ -364,7 +375,10 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
         int kv_seq_index = tile->M * seq_len + seq_idx;
         if(kv_seq_index >= _seq) break;
         for(int i = 0; i <_dk; i++) {
-            std::vector<uint32_t> idx = {(uint32_t)(kv_head_idx), (uint32_t)seq_idx, (uint32_t)i};
+            std::vector<uint32_t> idx = {
+                static_cast<uint32_t>(kv_head_idx),
+                static_cast<uint32_t>(kv_seq_index),
+                static_cast<uint32_t>(i)};
             dram_kv_addrs.insert(make_address(idx, _key_shape));
         }
     }
@@ -414,13 +428,64 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
         .src_addrs = value_addrs,
         .operand_id = _INPUT_OPERAND + 2,  // value
     }));
+
+    const std::set<addr_type> loaded_key_addrs(key_addrs.begin(), key_addrs.end());
+    const std::set<addr_type> loaded_value_addrs(value_addrs.begin(), value_addrs.end());
+    auto weight_block_id = [&](const std::set<addr_type>& loaded_addrs,
+                               addr_type operand_base,
+                               int global_seq_offset, int seq_count,
+                               int feature_offset, int feature_count,
+                               uint32_t tile_m, uint32_t tile_k) {
+        std::vector<addr_type> exact_addresses;
+        exact_addresses.reserve(seq_count * feature_count);
+        for (int seq_iter = 0; seq_iter < seq_count; ++seq_iter) {
+            const int global_seq_index = global_seq_offset + seq_iter;
+            if (global_seq_index < 0 ||
+                global_seq_index >= static_cast<int>(_seq) ||
+                global_seq_index >= static_cast<int>(_key_shape[1])) {
+                return uint64_t{0};
+            }
+            for (int feature_iter = 0; feature_iter < feature_count;
+                 ++feature_iter) {
+                const int feature_index = feature_offset + feature_iter;
+                if (kv_head_idx < 0 ||
+                    kv_head_idx >= static_cast<int>(_key_shape[0]) ||
+                    feature_index < 0 ||
+                    feature_index >= static_cast<int>(_key_shape[2])) {
+                    return uint64_t{0};
+                }
+                std::vector<uint32_t> idx = {
+                    static_cast<uint32_t>(kv_head_idx),
+                    static_cast<uint32_t>(global_seq_index),
+                    static_cast<uint32_t>(feature_index)};
+                const addr_type loaded_address =
+                    operand_base + make_address(idx, _key_shape);
+                if (loaded_addrs.count(loaded_address) == 0) {
+                    return uint64_t{0};
+                }
+
+                const addr_type element_offset =
+                    ((static_cast<addr_type>(kv_head_idx) * _key_shape[1] +
+                      static_cast<addr_type>(global_seq_index)) *
+                         _key_shape[2] +
+                     static_cast<addr_type>(feature_index)) *
+                    _config.precision;
+                exact_addresses.push_back(operand_base + element_offset);
+            }
+        }
+        return intern_sa_weight_block(exact_addresses, tile_m, tile_k);
+    };
      // -- compute -- //     
     // GEMM (q*k -> l)
     for(int sitr = 0; sitr < seq_len; sitr+=_config.core_config[target_core].core_height) {
         int s_loop = std::min(seq_len - sitr, _config.core_config[target_core].core_height);
         for(int kitr = 0; kitr < _dk; kitr+=_config.core_config[target_core].core_height) {
             int k_loop = std::min(_dk - kitr, _config.core_config[target_core].core_height);
-                for (int h_ofs = 0; h_ofs < num_heads; h_ofs++) {
+            uint64_t block_id = weight_block_id(
+                loaded_key_addrs, key_addr, tile->M * seq_len + sitr,
+                s_loop, kitr, k_loop, static_cast<uint32_t>(s_loop),
+                static_cast<uint32_t>(k_loop));
+            for (int h_ofs = 0; h_ofs < num_heads; h_ofs++) {
                 Opcode op = h_ofs == 0 ? Opcode::GEMM_PRELOAD : Opcode::GEMM;
                 int h_idx = head_idx + h_ofs;
                 addr_type sram_q_ofs = sram_query_base + h_ofs * (q_len * _dk) * _config.precision;
@@ -434,7 +499,9 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
                     .src_addrs = std::vector<addr_type>{sram_q_ofs, sram_k_ofs},
                     .tile_m = static_cast<unsigned int>(s_loop),
                     .tile_k = static_cast<unsigned int>(k_loop),
-                    .tile_n = static_cast<unsigned int>(q_len)
+                    .tile_n = static_cast<unsigned int>(q_len),
+                    .sa_weight_block_id = block_id,
+                    .sa_weight_block_known = block_id != 0
                 }));
             }
         }
@@ -516,6 +583,10 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
         int k_loop = std::min(_dk - kitr, _config.core_config[target_core].core_height);
         for(int sitr = 0; sitr < seq_len; sitr+=_config.core_config[target_core].core_height) {
             int s_loop = std::min(seq_len - sitr, _config.core_config[target_core].core_height);
+            uint64_t block_id = weight_block_id(
+                loaded_value_addrs, value_addr, tile->M * seq_len + sitr,
+                s_loop, kitr, k_loop, static_cast<uint32_t>(k_loop),
+                static_cast<uint32_t>(s_loop));
             for (int h_ofs = 0; h_ofs < num_heads; h_ofs++) {
                 Opcode op = h_ofs == 0 ? Opcode::GEMM_PRELOAD : Opcode::GEMM;
                 addr_type sram_l_ofs = sram_logit_base + h_ofs * (q_len * seq_len) * _config.precision;
@@ -528,7 +599,9 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
                     .tile_m = static_cast<unsigned int>(k_loop),
                     .tile_k = static_cast<unsigned int>(s_loop),
                     .tile_n = static_cast<unsigned int>(q_len),
-                    .src_from_accum = true
+                    .src_from_accum = true,
+                    .sa_weight_block_id = block_id,
+                    .sa_weight_block_known = block_id != 0
                 }));
             }
         }
@@ -602,8 +675,8 @@ void Attention::initialize_non_fused_tiles(MappingTable& mapping_table) {
             }
             _tiles.insert(
                 _tiles.end(),
-                std::make_move_iterator(key_query.get_tiles().begin()),
-                std::make_move_iterator(key_query.get_tiles().end())
+                std::make_move_iterator(key_query_tiles.begin()),
+                std::make_move_iterator(key_query_tiles.end())
             );
             _tiles.push_back(std::make_unique<Tile>(Tile{.status = Tile::Status::BAR, .layer_id = _id}));
             fused_op_id++;
@@ -612,14 +685,15 @@ void Attention::initialize_non_fused_tiles(MappingTable& mapping_table) {
             Softmax attention_score = Softmax(_config, mapping_table, query_key_shape);
             /* Todo. dram addr */
             attention_score.initialize_tiles(mapping_table);
-            std::deque<std::unique_ptr<Tile>>& attention_score_tiles = key_query.get_tiles();
+            std::deque<std::unique_ptr<Tile>>& attention_score_tiles =
+                attention_score.get_tiles();
             for (const auto& tile : attention_score_tiles) {
                 tile->layer_id = _id;
             }
             _tiles.insert(
                 _tiles.end(),
-                std::make_move_iterator(key_query.get_tiles().begin()),
-                std::make_move_iterator(key_query.get_tiles().end())
+                std::make_move_iterator(attention_score_tiles.begin()),
+                std::make_move_iterator(attention_score_tiles.end())
             );
             _tiles.push_back(std::make_unique<Tile>(Tile{.status = Tile::Status::BAR, .layer_id = _id}));
 
@@ -635,8 +709,8 @@ void Attention::initialize_non_fused_tiles(MappingTable& mapping_table) {
             }
             _tiles.insert(
                 _tiles.end(),
-                std::make_move_iterator(attention.get_tiles().begin()),
-                std::make_move_iterator(attention.get_tiles().end())
+                std::make_move_iterator(attention_tiles.begin()),
+                std::make_move_iterator(attention_tiles.end())
             );
             _tiles.push_back(std::make_unique<Tile>(Tile{.status = Tile::Status::BAR, .layer_id = _id}));
             fused_op_id++;

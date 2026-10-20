@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "mode": "shadow",
+  "minimum_causal_bound_cycles": 1,
+  "apply_break_even_filter": false,
+  "prefer_off_when_safe": true,
+  "on_idle_power_w": null,
+  "controller_power_w": null,
+  "retention": {
+    "enabled": true,
+    "entry_latency_cycles": 0,
+    "wake_latency_cycles": 0,
+    "break_even_cycles": 0,
+    "idle_power_w": null,
+    "entry_energy_j": null,
+    "wake_energy_j": null
+  },
+  "off": {
+    "enabled": true,
+    "entry_latency_cycles": 0,
+    "wake_latency_cycles": 0,
+    "break_even_cycles": 0,
+    "idle_power_w": null,
+    "entry_energy_j": null,
+    "wake_energy_j": null
+  },
+  "note": "Screening template only. Replace null technology values and zero placeholder latencies with approved measurements before making energy or performance claims."
+}

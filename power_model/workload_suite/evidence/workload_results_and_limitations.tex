@@ -1,0 +1,211 @@
+\subsection{Workload Methodology and Coverage}
+\label{sec:workload-methodology}
+
+We evaluate a four-core, 1-GHz NPU in which each core contains a
+$128\times128$ weight-stationary systolic array.  Table~\ref{tab:workload-suite}
+summarizes the evaluated workload configurations.  All image-classification
+graphs use batch size one and execute end to end.  GPT-2 also executes its
+complete optimized ONNX graph with batch size one, sequence length 1024,
+past-sequence length zero, and output-sequence length 1025.
+
+The language-model generator is evaluated with five requests.  Each request
+has prompt length 32, target length 8, and cached length zero; request arrivals
+occur at 0, 100,000, 200,000, 300,000, and 400,000 cycles.  The scheduler is
+configured with a maximum batch size of eight.  We refer to this experiment as
+the \emph{32/8 configuration}.  OPT-125M is evaluated both as a complete
+12-layer model and as one representative decoder layer.  The larger OPT and
+LLaMA models use one representative decoder layer because their complete-model
+execution cost scales with layer count.  The representative-layer claim is
+validated separately below and is restricted to the repeated OPT decoder
+structure.
+
+\begin{table*}[t]
+  \centering
+  \caption{Evaluated workload suite and execution scope.  ``Full'' denotes an
+  end-to-end graph or all model layers; ``1/$L$'' denotes one representative
+  layer from an $L$-layer language model.}
+  \label{tab:workload-suite}
+  \begin{tabular}{lllcl}
+    \toprule
+    Workload(s) & Family & Input configuration & Scope & Model path \\
+    \midrule
+    AlexNet; ResNet-18/34/50/101 & CNN & batch 1 & Full & Audited ONNX \\
+    VGG-11/16/19; Wide-ResNet-50-2 & CNN & batch 1 & Full & Audited ONNX \\
+    GPT-2 & Transformer & batch 1, sequence 1024 & Full & Audited ONNX \\
+    OPT-125M & Transformer & five 32/8 requests, max batch 8 & Full (12 layers) & Native generator \\
+    OPT-1.3B & Transformer & five 32/8 requests, max batch 8 & 1/24 & Native generator \\
+    OPT-2.7B & Transformer & five 32/8 requests, max batch 8 & 1/32 & Native generator \\
+    OPT-6.7B & Transformer & five 32/8 requests, max batch 8 & 1/32 & Native generator \\
+    OPT-66B & Transformer & five 32/8 requests, max batch 8 & 1/64 & Native generator \\
+    LLaMA-3-8B & Transformer & five 32/8 requests, max batch 8 & 1/32 & Native generator \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+For imported ONNX graphs, we perform a strict operator audit before simulation.
+The modeled set comprises convolution, fused convolution, matrix multiplication
+and GEMM variants, pooling, flattening, attention, embedding normalization,
+skip-layer normalization, and fused GELU variants.  Cast and output-reorder
+nodes are accepted only as explicit pass-through operations.  A graph is
+rejected if it contains any other operator, because ONNXim would otherwise
+represent that node as a zero-work dummy operation.  Grouped or depthwise
+convolution is also rejected by the current weight-stationary mapping path.
+An audit pass is necessary but not sufficient: the run must additionally
+initialize, complete, satisfy mapping capacity, and pass the simulator's final
+accounting checks.  The ten graph workloads in Table~\ref{tab:workload-suite}
+satisfied these requirements.  Language models generated directly by ONNXim
+do not pass through the ONNX operator-audit path.
+
+\subsubsection{Representative-layer validation}
+\label{sec:representative-layer-validation}
+
+Table~\ref{tab:representative-layer} compares one OPT-125M decoder layer with
+the complete 12-layer execution under the same 32/8 configuration.  The
+complete/single-layer ratios closely track the ideal factor of 12.  In
+particular, the normalized net saving changes from 1.1182\% to 1.1220\%, a
+difference of only 0.0038 percentage points.  This result supports
+representative-layer characterization for structurally repeated OPT decoder
+blocks under this configuration.  It does not establish the same equivalence
+for unrelated architectures or input configurations.  Only the full
+OPT-125M result is included in the main workload aggregate.
+
+\begin{table}[t]
+  \centering
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
+  \caption{Single-layer versus complete 12-layer OPT-125M validation.}
+  \label{tab:representative-layer}
+  \begin{tabular}{lrrr}
+    \toprule
+    Metric & One layer & 12 layers & Full/single \\
+    \midrule
+    Core-cycles & 4,196,744 & 50,194,496 & 11.9603 \\
+    OFF cycles & 515,516 & 6,210,937 & 12.0480 \\
+    OFF coverage (\%) & 12.2837 & 12.3737 & -- \\
+    Gross saving (J) & $4.52584\!\times\!10^{-7}$ & $5.42518\!\times\!10^{-6}$ & 11.9871 \\
+    Controller energy (J) & $1.82071\!\times\!10^{-7}$ & $2.17879\!\times\!10^{-6}$ & 11.9667 \\
+    Net saving (J) & $2.70513\!\times\!10^{-7}$ & $3.24640\!\times\!10^{-6}$ & 12.0009 \\
+    Net/reference (\%) & 1.1182 & 1.1220 & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Workload-Level Energy Results}
+\label{sec:workload-energy-results}
+
+For each workload, exact synthesized-controller replay supplies the OFF
+episodes.  The direct HSPICE duration--energy curve supplies the corresponding
+array transition and leakage energy, while 100\%-annotated ASAP7 gate-level
+activity supplies controller energy.  Let $P_{\mathrm{on}}$ be the measured
+steady-state ON leakage of the scaled $128\times128$ array and $T_w$ the sum of
+core-cycles for workload $w$.  The common normalization reference is
+\begin{equation}
+  E_{\mathrm{ref},w}=P_{\mathrm{on}}\frac{T_w}{10^9},
+  \qquad P_{\mathrm{on}}=5.7643057152\ \mathrm{mW}.
+\end{equation}
+Gross saving includes array leakage reduction minus the measured OFF/ON event
+cost.  Net saving subtracts the full-trace controller energy:
+\begin{equation}
+  E_{\mathrm{net},w}=E_{\mathrm{gross},w}-E_{\mathrm{ctrl},w}.
+\end{equation}
+These percentages therefore quantify saving relative to the array's
+always-ON static-energy reference; they are not whole-chip energy reductions.
+
+\begin{table*}[t]
+  \centering
+  \caption{Measured workload results.  OFF is the fraction of total
+  core-cycles switched OFF.  Energy columns are percentages of the always-ON
+  SA static-energy reference.  OPT-66B net energy is omitted because only one
+  of four required controller-power reports is retained.}
+  \label{tab:workload-energy}
+  \begin{tabular}{lrrrr}
+    \toprule
+    Workload & OFF cycles (\%) & Gross saving (\%) & Controller (\%) & Net saving (\%) \\
+    \midrule
+    AlexNet             & 11.773 & 1.317 & 0.688 & +0.630 \\
+    ResNet-18           &  0.000 & 0.000 & 0.576 & -0.576 \\
+    ResNet-34           &  0.000 & 0.000 & 0.577 & -0.577 \\
+    ResNet-50           &  0.000 & 0.000 & 0.591 & -0.591 \\
+    ResNet-101          &  0.000 & 0.000 & 0.593 & -0.593 \\
+    VGG-11              & 17.348 & 0.960 & 0.752 & +0.209 \\
+    VGG-16              & 20.824 & 1.398 & 0.735 & +0.663 \\
+    VGG-19              & 17.840 & 1.125 & 0.715 & +0.410 \\
+    Wide-ResNet-50-2    &  0.000 & 0.000 & 0.592 & -0.592 \\
+    GPT-2               &  1.342 & 0.205 & 0.681 & -0.475 \\
+    OPT-125M (12 layers)& 12.374 & 1.875 & 0.753 & +1.122 \\
+    OPT-1.3B            & 26.582 & 1.835 & 0.813 & +1.022 \\
+    OPT-2.7B            & 28.491 & 1.840 & 0.831 & +1.009 \\
+    OPT-6.7B            & 24.702 & 1.745 & 0.821 & +0.924 \\
+    OPT-66B             & 22.386 & 2.000 & --    & -- \\
+    LLaMA-3-8B          & 23.635 & 1.638 & 0.819 & +0.819 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+Among the 15 workloads with complete net-energy evidence, nine are positive
+and six are negative.  Their equal-workload arithmetic mean is +0.227\% and
+their median is +0.410\%.  Weighting instead by the static-reference energy
+(equivalently, by total core-cycles at the fixed array leakage and frequency)
+gives +0.723\%.  The two aggregates answer different questions and are both
+reported explicitly to avoid allowing long workloads to dominate an
+unqualified average.
+
+The signs follow directly from the measured balance between opportunity and
+overhead.  ResNet-18/34/50/101 and Wide-ResNet-50-2 have no certified OFF
+cycles, so their gross saving is zero while the controller remains active.
+GPT-2 exposes only 1.342\% OFF coverage: its 0.205\% gross reduction is smaller
+than its 0.681\% controller cost.  Conversely, the VGG, OPT, LLaMA, and AlexNet
+cases provide sufficient profitable OFF intervals to exceed controller
+energy.  Zero certified OFF coverage does not imply that the SA has no raw
+idle cycles; it means that those idle cycles do not satisfy the present
+causal, break-even, and non-retentive safety conditions.
+
+\subsection{Limitations and Proposed Retention Extension}
+\label{sec:limitations-retention}
+
+The current evaluation has the following limitations.
+\begin{itemize}
+  \item Power-state decisions are replayed as a shadow mechanism and do not
+  feed wake-up delay back into ONNXim scheduling.  The current results
+  therefore establish cycle-preserving decisions for the evaluated traces,
+  but do not measure a performance--energy trade-off with nonzero wake delay.
+  \item The mechanism is non-retentive.  It permits OFF only when the next
+  certified SA use reloads state through \texttt{GEMM\_PRELOAD}; intervals
+  leading directly to a state-reusing \texttt{GEMM} are excluded.
+  \item The M300-equivalent header is a characterized design point, not a
+  proven full-array optimum.  The model does not include a routed full-array
+  power-delivery network or worst-case instantaneous droop.
+  \item Array event energy is scaled linearly per PE from direct $1\times1$
+  characterization, with a $4\times4$ experiment used as the available
+  scaling check.  A transistor-level $128\times128$ array is not simulated.
+  \item Controller power is synthesis-stage, 100\%-annotated gate power.  The
+  reported implementation excludes placed power-grid parasitics, isolation
+  cells, routed clock-tree and interconnect power, delay-dependent glitch
+  power, and architectural reset/control energy.  The descriptor-generation
+  hardware that would replace simulator-side metadata production is also not
+  included in the synthesized controller area or power.
+  \item Results cover one four-core, $128\times128$, 1-GHz NPU configuration.
+  Language inputs use the stated 32/8 request stream, graph inputs use batch
+  one, and unsupported ONNX graphs are excluded.  Representative-layer
+  equivalence is measured for OPT-125M only and is not assumed for all model
+  families.
+  \item OPT-66B has complete replay and gross array-energy evidence, but lacks
+  three of the four controller-power reports required for an exact net result;
+  it is excluded from all net-energy aggregates.
+\end{itemize}
+
+A state-retentive extension is a proposed next step, not a measured result.
+It would preserve all PE state required by a subsequent state-reusing
+\texttt{GEMM}, allowing the controller to consider intervals that the present
+non-retentive certificate rejects.  The existing causal lower bounds and
+frozen countdown can remain, while the policy selects among ON, retention,
+and OFF states: retention for intervals requiring preserved state, and OFF
+for sufficiently long intervals whose next use performs a certified preload.
+
+Quantifying this extension requires new circuit and architectural evidence:
+retention voltage and leakage, entry and wake energy, entry and wake latency,
+and state-correctness characterization; synthesis and activity-based power for
+the additional mode-control logic; simulator feedback of wake delay to measure
+performance loss; and replay or formal validation of every state transition.
+Until those measurements are available, no retention energy saving or
+performance penalty is claimed.

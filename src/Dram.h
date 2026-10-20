@@ -12,6 +12,23 @@
 
 class Dram {
  public:
+  struct ModelQuiescenceStatus {
+    bool observable = false;
+    bool outstanding_demand_zero = false;
+    bool wrapper_queues_empty = false;
+    bool controller_queues_empty = false;
+    bool no_command_issued_this_cycle = false;
+    bool no_data_transfer_this_cycle = false;
+    bool no_maintenance_activity_this_cycle = false;
+
+    bool quiescent() const {
+      return observable && outstanding_demand_zero &&
+             wrapper_queues_empty && controller_queues_empty &&
+             no_command_issued_this_cycle &&
+             no_data_transfer_this_cycle &&
+             no_maintenance_activity_this_cycle;
+    }
+  };
   virtual ~Dram() = default;
   virtual bool running() = 0;
   virtual void cycle() = 0;
@@ -24,6 +41,7 @@ class Dram {
   static uint32_t map_channel_id(addr_type address, uint32_t request_size,
                                  uint32_t channel_count);
   virtual void print_stat() {}
+  virtual ModelQuiescenceStatus get_model_quiescence_status() const = 0;
   void print_component_characterization() const;
 
  protected:
@@ -31,10 +49,6 @@ class Dram {
   uint32_t _n_ch;
   cycle_type _cycles;
   std::vector<uint64_t> _outstanding_demand_requests;
-  std::vector<uint64_t> _channel_demand_active_cycles;
-  std::vector<uint64_t> _channel_demand_active_start;
-  uint64_t _any_channel_demand_active_cycles = 0;
-  uint64_t _any_channel_demand_active_start = 0;
   uint64_t _total_outstanding_requests = 0;
   uint64_t _accepted_requests = 0;
   uint64_t _completed_requests = 0;
@@ -44,11 +58,16 @@ class Dram {
   uint64_t _accepted_write_bytes = 0;
   uint64_t _peak_total_outstanding_requests = 0;
   bool _component_characterization = false;
+  uint64_t _modeled_quiescent_cycles = 0;
+  uint64_t _quiescence_sampled_cycles = 0;
+  uint64_t _zero_outstanding_cycles = 0;
+  bool _quiescence_available = true;
 
   void initialize_component_counters();
   void record_request_accepted(uint32_t channel,
                                const MemoryAccess* request);
   void record_response_ready(uint32_t channel, MemoryAccess* response);
+  void record_model_quiescence_cycle(const ModelQuiescenceStatus& status);
 };
 
 class SimpleDram : public Dram {
@@ -61,6 +80,7 @@ class SimpleDram : public Dram {
   virtual bool is_empty(uint32_t cid) override;
   virtual MemoryAccess* top(uint32_t cid) override;
   virtual void pop(uint32_t cid) override;
+  ModelQuiescenceStatus get_model_quiescence_status() const override;
 
  private:
   uint32_t _latency;
@@ -83,6 +103,7 @@ class DramRamulator : public Dram {
   virtual MemoryAccess* top(uint32_t cid) override;
   virtual void pop(uint32_t cid) override;
   virtual void print_stat() override;
+  ModelQuiescenceStatus get_model_quiescence_status() const override;
 
  private:
   std::unique_ptr<ram::Ramulator> _mem;
@@ -105,6 +126,7 @@ class DramRamulator2 : public Dram {
   virtual MemoryAccess* top(uint32_t cid) override;
   virtual void pop(uint32_t cid) override;
   virtual void print_stat() override;
+  ModelQuiescenceStatus get_model_quiescence_status() const override;
 
  private:
   std::vector<std::unique_ptr<NDPSim::Ramulator2>> _mem;

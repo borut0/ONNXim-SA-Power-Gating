@@ -34,6 +34,20 @@ Core::Core(uint32_t id, SimulationConfig config)
   _component_characterization =
       component_measure != nullptr && component_measure[0] != '\0' &&
       std::string(component_measure) != "0";
+  auto environment_enabled = [](const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' &&
+           std::string(value) != "0";
+  };
+  _next_sa_metadata_enabled =
+      environment_enabled("ONNXSIM_SA_CONTROLLER_TRACE_DIR") ||
+      environment_enabled("ONNXSIM_SA_PREDICTOR_MEASURE") ||
+      environment_enabled("ONNXSIM_SA_RETENTION_SHADOW") ||
+      environment_enabled("ONNXSIM_SA_EVENT_TRACE_DIR") ||
+      environment_enabled("ONNXSIM_SA_HYBRID_CONFIG") ||
+      environment_enabled("ONNXSIM_SA_UPDATED_PREDICTOR") ||
+      environment_enabled("ONNXSIM_REGATE_UPDATED_PROFILE") ||
+      environment_enabled("ONNXSIM_REGATE_EVENT_DRIVEN_PROFILE");
   _waiting_write_reqs = 0;
   _running_layer = -1;
 }
@@ -71,6 +85,13 @@ void Core::issue(std::unique_ptr<Tile> op) {
 
   op->spad_id = spad_id;
   op->accum_spad_id = acc_spad_id;
+  if (_next_sa_metadata_enabled) {
+    if (!op->sa_metadata_finalized) {
+      throw std::logic_error(
+          "tile reached a core before SA metadata finalization");
+    }
+    op->reset_runtime_sa_metadata();
+  }
   op->status = Tile::Status::RUNNING;
   if (op->skip) {
     op->status = Tile::Status::FINISH;
@@ -177,16 +198,22 @@ void Core::cycle() {
   _last_core_cycle_dependency_block = false;
   _last_core_cycle_unknown_block = false;
   _last_core_cycle_compute_issue_block = false;
+  _last_instruction_flow_events.clear();
+  _last_retired_tile_ids.clear();
 
   _core_cycle++;
-  _spad.cycle();
-  _acc_spad.cycle();
+  const bool spad_idle = _spad.cycle();
+  const bool accum_spad_idle = _acc_spad.cycle();
+  if (spad_idle && accum_spad_idle) {
+    _all_sram_modeled_idle_cycles++;
+  }
   for (int tile_iter = 0; tile_iter < _tiles.size(); tile_iter++) {
     int i = (tile_iter + tile_rr) % _tiles.size();
     if(_tiles[i]->instructions.empty()) 
       continue;
     _last_core_cycle_had_pending_instruction = true;
     std::unique_ptr<Instruction>& inst = _tiles[i]->instructions.front();
+    const Instruction* issued_instruction = inst.get();
     inst->measurement_tile_id = _tiles[i]->measurement_tile_id;
     if(_tiles[i]->instructions.size() == 1) {
       inst->last_inst = true;
@@ -204,6 +231,7 @@ void Core::cycle() {
       buffer_id = _tiles[i]->spad_id;
     }
     bool issued = false;
+    InstructionBlockReason block_reason = InstructionBlockReason::NONE;
     if (inst->opcode == Opcode::MOVIN) {
       /*LD inst queue */
       if (inst->size == 0) {
@@ -228,6 +256,12 @@ void Core::cycle() {
         issued = true;
       } else {
         record_instruction_issue_wait(get_store_wait_reason(*inst));
+        OperandWaitReason wait_reason = get_store_wait_reason(*inst);
+        block_reason = wait_reason == OperandWaitReason::MEMORY
+            ? InstructionBlockReason::MEMORY
+            : wait_reason == OperandWaitReason::DEPENDENCY
+                ? InstructionBlockReason::DEPENDENCY
+                : InstructionBlockReason::UNKNOWN;
       }
     } else {
       /* Ex inst queue */
@@ -239,25 +273,57 @@ void Core::cycle() {
         //end
         _ex_inst_queue.push(std::move(inst));
         issued = true;
+      } else if (!_ex_inst_queue.empty()) {
+        block_reason = InstructionBlockReason::EXECUTION_QUEUE_BUSY;
       } else if (_ex_inst_queue.empty()) {
         _last_core_cycle_compute_issue_block = true;
         OperandWaitReason wait_reason = get_operand_wait_reason(*inst);
         if (wait_reason == OperandWaitReason::NONE) {
           _last_core_cycle_unknown_block = true;
+          block_reason = specialized_compute_block_reason();
         } else {
           record_instruction_issue_wait(wait_reason);
+          block_reason = wait_reason == OperandWaitReason::MEMORY
+              ? InstructionBlockReason::MEMORY
+              : wait_reason == OperandWaitReason::DEPENDENCY
+                  ? InstructionBlockReason::DEPENDENCY
+                  : InstructionBlockReason::UNKNOWN;
         }
       }
     }
+    InstructionFlowEvent flow_event{
+        .cycle = _core_cycle,
+        .tile_id = _tiles[i]->measurement_tile_id,
+        .layer_id = _tiles[i]->layer_id,
+        .fused_op_id = _tiles[i]->fused_op_id,
+        .operation = _tiles[i]->optype,
+        .instruction_ordinal = inst
+            ? inst->tile_instruction_ordinal
+            : issued_instruction->tile_instruction_ordinal,
+        .opcode = issued_instruction->opcode,
+        .issued = issued,
+        .block_reason = issued ? InstructionBlockReason::NONE : block_reason,
+        .previous_issued_tile_id = _last_issued_tile_id,
+        .tile_switch = issued && _last_issued_tile_id != 0 &&
+                       _last_issued_tile_id != _tiles[i]->measurement_tile_id,
+        .next_sa_prefix_before = _tiles[i]->next_sa_prefix_count,
+        .weight_block_id = issued_instruction->sa_weight_block_id,
+        .weight_block_known = issued_instruction->sa_weight_block_known};
+    _last_instruction_flow_events.push_back(std::move(flow_event));
     if (issued) {
       _last_core_cycle_issued_instruction = true;
+      if (_next_sa_metadata_enabled) {
+        _tiles[i]->advance_sa_metadata(issued_instruction);
+      }
       _tiles[i]->instructions.pop_front();
+      _last_issued_tile_id = _tiles[i]->measurement_tile_id;
       tile_rr = i;
       break;
     }
   }
   for (auto tile = _tiles.begin() ; tile < _tiles.end(); tile++) {
     if ((*tile)->instructions.empty() && (*tile)->inst_finished) {
+      _last_retired_tile_ids.push_back((*tile)->measurement_tile_id);
       (*tile)->status = Tile::Status::FINISH;
       (*tile)->stat.cycles = _core_cycle - (*tile)->stat.start_cycle;
       (*tile)->stat.memory_stall =
@@ -270,6 +336,10 @@ void Core::cycle() {
   if(_config.core_print_interval && _core_cycle % _config.core_print_interval == 0) {
     print_current_stats();
   }
+}
+
+Core::InstructionBlockReason Core::specialized_compute_block_reason() const {
+  return InstructionBlockReason::UNKNOWN;
 }
 
 bool Core::running() {
@@ -413,6 +483,16 @@ bool Core::can_issue_compute(std::unique_ptr<Instruction>& inst) {
   return result;
 }
 
+void Core::record_compute_operand_reads(const Instruction& inst) {
+  for (addr_type address : inst.src_addrs) {
+    if (inst.src_from_accum && address >= ACCUM_SPAD_BASE) {
+      _acc_spad.record_modeled_read(address, inst.accum_spad_id);
+    } else {
+      _spad.record_modeled_read(address, inst.spad_id);
+    }
+  }
+}
+
 void Core::record_instruction_issue_wait(OperandWaitReason reason) {
   switch (reason) {
     case OperandWaitReason::NONE:
@@ -522,8 +602,20 @@ void Core::print_stats() {
         _core_cycle - _stat_tot_compute_cycle;
     const cycle_type core_request_fifo_nonempty_cycles =
         _core_cycle - _stat_tot_memory_idle_cycle;
+    auto sram_record = [&](const Sram& sram) {
+      return json{{"modeled_cycles", sram.modeled_cycles()},
+                  {"modeled_idle_cycles", sram.modeled_idle_cycles()},
+                  {"modeled_active_cycles",
+                   sram.modeled_cycles() - sram.modeled_idle_cycles()},
+                  {"modeled_read_active_cycles",
+                   sram.modeled_read_active_cycles()},
+                  {"modeled_write_active_cycles",
+                   sram.modeled_write_active_cycles()},
+                  {"modeled_read_events", sram.modeled_read_events()},
+                  {"modeled_write_events", sram.modeled_write_events()}};
+    };
     json record{
-        {"version", 1},
+        {"version", 2},
         {"core_id", _id},
         {"core_cycles", _core_cycle},
         {"sa_active_cycles", _stat_tot_systolic_active_cycle},
@@ -544,6 +636,23 @@ void Core::print_stats() {
         {"core_request_fifo_nonempty_percent",
          percent(core_request_fifo_nonempty_cycles)},
         {"core_request_fifo_empty_cycles", _stat_tot_memory_idle_cycle},
+        {"spad_model",
+         {{"main", sram_record(_spad)},
+          {"accumulator", sram_record(_acc_spad)},
+          {"all_devices_modeled_idle_cycles",
+           _all_sram_modeled_idle_cycles},
+          {"all_devices_modeled_active_cycles",
+           _core_cycle - _all_sram_modeled_idle_cycles},
+          {"cycle_count_evidence_class", "measured"},
+          {"measurement_scope", "instruction-level simulator events"},
+          {"idle_predicate",
+           "main_read_or_write_events == 0 && accumulator_read_or_write_events == 0"},
+          {"all_devices_model_semantics",
+           "no explicit logical read or write event in either whole SRAM "
+           "during the core cycle"},
+          {"model_limit",
+           "logical event-level model only; no bank, port, SRAM latency, "
+           "or physical macro activity is inferred"}}},
         {"execution_attribution",
          {{"compute", _attrib_compute_cycles},
           {"memory_stall", _attrib_memory_stall_cycles},
@@ -717,6 +826,10 @@ void Core::handle_st_inst_queue() {
         buffer_id = front->spad_id;
       }
       if(buffer->check_hit(front->dest_addr, buffer_id)) {
+        if (!front->src_addrs.empty()) {
+          buffer->record_modeled_read(front->dest_addr, buffer_id,
+                                      front->src_addrs.size());
+        }
         for (addr_type addr : front->src_addrs) {
           assert(front->base_addr != GARBEGE_ADDR);
           MemoryAccess *access =

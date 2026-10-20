@@ -1,0 +1,224 @@
+\subsection{Construction of the Causal Lower Bound}
+\label{sec:causal-bound-components}
+
+The controller derives a positive idle-time certificate from three sources:
+the instruction prefix before the next SA operation, the position of required
+memory requests in the core request FIFO, and the number of required memory
+responses that have not yet returned. Each quantity is converted into a lower
+bound under maximum-rate progress. The controller never substitutes an
+average memory latency or a subsequently observed completion time.
+
+\subsubsection{Instruction-Prefix Bound}
+
+For each resident tile, the simulator locates the first remaining
+\texttt{GEMM\_PRELOAD} or \texttt{GEMM}. Let $P_i$ denote the number of
+instructions preceding that candidate in tile $i$. Because the core can
+successfully remove at most one resident instruction per cycle, the candidate
+cannot be issued for at least
+\begin{equation}
+  B^{\mathrm{prefix}}_i=P_i
+  \label{eq:prefix-bound}
+\end{equation}
+cycles. By construction, every instruction counted in $P_i$ is non-SA: the
+scan stops at the first SA instruction. Therefore, the prefix itself cannot
+require the powered-down array.
+
+When $P_i>0$, the implemented controller uses the prefix directly and does
+not add a memory bound. Operand state can change while the prefix drains, but
+such changes cannot make the SA candidate pass the preceding instructions.
+If the operands remain unavailable, execution starts later; if they become
+ready early, the prefix remains binding. This choice preserves a valid lower
+bound without assuming independence between instruction issue and memory
+progress.
+
+\subsubsection{Core-FIFO Ticket Bound}
+
+A \texttt{MOVIN} is divided into one 32-byte \texttt{MemoryAccess} object per
+source address. ONNXim assigns these objects monotonically increasing tickets
+when they enter the core request FIFO. For each scratchpad allocation, the
+predictor stores the ticket of the final request required by that allocation.
+The core also records the ticket of the most recently dequeued request and
+checks that dequeues preserve consecutive FIFO order.
+
+Let $q_{i,j}$ be the tail ticket for source operand $j$ of tile $i$, and let
+$d$ be the most recently dequeued ticket. When $q_{i,j}>d$, its current FIFO
+position is
+\begin{equation}
+  Q_{i,j}=q_{i,j}-d.
+  \label{eq:fifo-position}
+\end{equation}
+The evaluated configuration has 16 injection ports per core and equal 1-GHz
+core and NoC clocks. Even under maximum service, the tail request cannot leave
+the FIFO earlier than
+\begin{equation}
+  B^{\mathrm{fifo}}_{i,j}
+    =\left\lfloor\frac{Q_{i,j}-1}{16}\right\rfloor
+  \label{eq:fifo-ticket-bound}
+\end{equation}
+core cycles. For example, positions 1--16 produce a zero-cycle bound, while
+position 17 produces a one-cycle bound. This equation is enabled only when
+ticket order is exact, the operand is allocated but invalid, memory requests
+remain pending, and the tail ticket is still ahead of the dequeue frontier.
+Otherwise, this source contributes no positive certificate. The synthesized
+implementation uses 20-bit ticket and horizon fields; values outside the
+represented forward window are conservatively treated as unsupported rather
+than extrapolated.
+
+Equation~\ref{eq:fifo-ticket-bound} is configuration specific. It is exact
+for the evaluated 16-port, equal-clock configuration because division by 16
+is implemented as a four-bit right shift. A configuration with a different
+port count or clock ratio requires a separately derived constant-ratio bound;
+the evaluated RTL disables the specialized ticket certificate when its
+configuration check is not satisfied.
+
+\subsubsection{Outstanding-Response Bound}
+
+Leaving the core FIFO does not make an operand ready. A read remains
+outstanding while it traverses the NoC, DRAM, and return path. Each allocated
+scratchpad entry therefore maintains a pending-memory count that is
+initialized to the number of required requests and decremented only when a
+read response fills that entry. Let $N_{i,j}$ be the sampled number of
+required responses that have not yet returned for source operand $j$.
+
+At most 16 responses for a core can become visible between consecutive
+controller evaluations in the evaluated equal-clock configuration. Hence,
+even under maximum response progress, the operand cannot become valid for at
+least
+\begin{equation}
+  B^{\mathrm{resp}}_{i,j}
+    =\left\lfloor\frac{N_{i,j}-1}{16}\right\rfloor
+  \label{eq:response-drain-bound}
+\end{equation}
+cycles. The bound is emitted only for a used, allocated, invalid operand with
+$N_{i,j}>0$. Counts are represented in 20 bits; saturation can only shorten
+the certificate and is therefore conservative.
+
+The pending count includes requests that are still in the core FIFO as well
+as requests already traveling through the memory system. Consequently, the
+FIFO and response-drain intervals may overlap. They are two lower bounds on
+the same operand-ready time, not two independent serial delays. Adding them
+could count the same requests twice and overestimate the idle interval. The
+implemented controller therefore combines them using
+\begin{equation}
+  B_{i,j}=\max\!\left(B^{\mathrm{fifo}}_{i,j},
+                       B^{\mathrm{resp}}_{i,j}\right).
+  \label{eq:memory-bound-max}
+\end{equation}
+For a head SA candidate with two represented source operands, both operands
+must become ready; therefore,
+\begin{equation}
+  B^{\mathrm{head}}_i=\max_j B_{i,j}.
+  \label{eq:head-operand-bound}
+\end{equation}
+If an operand is already valid, it contributes zero. An unallocated or
+otherwise unclassifiable operand does not receive a guessed positive memory
+bound.
+
+\subsubsection{Hardware-State Boundary}
+
+The predictor-support state is not free. ONNXim adds a monotonically
+increasing ticket to each generated memory request, a last-dequeued ticket per
+core, a tail ticket per tracked scratchpad allocation, and pending-memory
+counts used by the controller descriptor. The synthesized controller includes
+the registered descriptor fields and the arithmetic that evaluates
+Eqs.~\ref{eq:fifo-ticket-bound}--\ref{eq:head-operand-bound}. However, the
+reported controller synthesis does not include a complete hardware
+implementation of the upstream queue/SRAM logic that produces and transports
+all descriptor inputs. As with next-SA descriptor generation, this interface
+boundary is reported explicitly; the present area and power results must not
+be interpreted as including every metadata-producer cost.
+
+\subsection{Non-Retentive Power-Gating Safety}
+\label{sec:nonretentive-safety}
+
+Power-gating the SA is non-retentive: values held in the processing-element
+registers are not assumed to survive an OFF interval. Consequently, an idle
+interval alone is insufficient to authorize power gating. The controller may
+enter the OFF state only when it has both (i) evidence that the SA cannot be
+needed before a certified deadline and (ii) evidence that losing the current
+SA-resident state cannot change subsequent execution.
+
+The second requirement follows from the weight-stationary instruction
+semantics. A \texttt{GEMM} instruction consumes weights already resident in
+the SA and therefore cannot safely follow a non-retentive OFF interval. A
+\texttt{GEMM\_PRELOAD} instruction reloads the required weights before their
+use. Hence, for each of the two resident tile slots, the controller requires
+the earliest future SA instruction to exist and to be
+\texttt{GEMM\_PRELOAD}. It also requires both resident slots to be occupied;
+the future-tile bound described in Sec.~\ref{sec:causal-predictor} limits the
+certificate to the earliest point at which a resident tile could retire and
+previously unseen work could enter.
+
+Table~\ref{tab:nonretentive-safety} summarizes the hazards checked by the
+implemented controller. These conditions are conjunctive: failure of any
+entry condition suppresses a new OFF decision.
+
+\begin{table}[t]
+  \centering
+  \caption{Safety conditions for a non-retentive SA OFF interval.}
+  \label{tab:nonretentive-safety}
+  \begin{tabular}{p{0.31\columnwidth}p{0.61\columnwidth}}
+    \toprule
+    Hazard & Implemented protection \\
+    \midrule
+    Useful SA work is already active
+      & Require the SA to be inactive at every certificate stage and at
+        entry commit. \\
+    Committed work can reach the SA immediately
+      & Require both the compute pipeline and execution-instruction queue to
+        be empty. \\
+    OFF destroys resident weights
+      & Require the first future SA instruction in each resident tile to be
+        \texttt{GEMM\_PRELOAD}, not \texttt{GEMM}. \\
+    Unseen tile work arrives early
+      & Require two resident tiles and cap the horizon using resident
+        retirement and global work-drain information. \\
+    Queue-distance evidence is ambiguous
+      & Require exact memory-request tickets throughout certificate
+        generation and at entry commit. \\
+    Metadata changes after sampling
+      & A write to either resident descriptor invalidates the certificate;
+        a write during sleep forces wake-up. \\
+    A saved deadline becomes stale
+      & Freeze the committed deadline, decrement it monotonically, and never
+        recompute or extend it while asleep. \\
+    SA demand appears before the deadline
+      & Wake immediately if the SA becomes active, either queue becomes
+        nonempty, ticket exactness is lost, or the countdown reaches the
+        one-cycle guard. \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Certificate construction is itself protected against stale observations.
+The implementation uses three registered evaluation stages. A descriptor
+write, observed SA activity, a nonempty compute or execution queue, or loss of
+ticket exactness invalidates the certificate at the intervening stage
+boundaries. The three elapsed evaluation cycles are deducted from the causal
+lower bound. With the evaluated 166-cycle break-even threshold and one-cycle
+wake guard, a fresh bound must therefore be at least 170 cycles; after the
+three-stage deduction, entry commits only when at least 167 cycles remain.
+
+Once entry commits, the controller stores the certified remaining interval in
+a countdown register. While OFF, the controller cannot increase this value;
+it either decrements the countdown or exits the OFF state. This frozen-deadline
+rule is important because continuously recomputing a later deadline from new
+observations could incorrectly prolong an interval that was justified by an
+older machine state.
+
+We validate the decision logic by replaying each accepted architectural trace
+against both the reference controller and its clock-gated implementation. A
+replay is accepted only when their emitted sleep episodes and summary records
+match exactly. Independently, the replay testbench counts a safety violation
+whenever the controller requests sleep while the trace reports the SA active,
+and terminates with an error if this count is nonzero. Thus, the validation
+establishes trace-level equivalence of the two controller implementations and
+the absence of sleep--activity overlap in an accepted replay.
+
+This validation has a deliberate scope. The controller is evaluated in
+shadow replay and does not feed a physical OFF/ON transition back into
+ONNXim's scheduling or timing. Therefore, unchanged workload cycle counts are
+not, by themselves, a measurement of zero wake-up penalty in an integrated
+power-gated NPU. Device-level transition delay and energy are characterized
+separately, and an end-to-end implementation that stalls execution during a
+late wake-up would be required to measure any resulting performance penalty.

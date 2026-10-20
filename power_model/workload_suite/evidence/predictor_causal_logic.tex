@@ -1,0 +1,156 @@
+% No additional LaTeX package is required for this section.
+\subsection{Causal Idle-Time Prediction}
+\label{sec:causal-predictor}
+
+The objective of the predictor is not to estimate the most likely idle
+duration. Instead, it constructs a \emph{causal lower bound} on the earliest
+cycle at which the SA can next be required. At cycle $t$, a certificate of
+$H(t)$ cycles asserts
+\begin{equation}
+  t_{\mathrm{next\mbox{-}SA}} - t \geq H(t),
+  \label{eq:causal-certificate}
+\end{equation}
+using only architectural state visible at or before $t$. The predictor does
+not use the subsequently observed idle duration, future DRAM latency, or an
+oracle trace. Underestimation only loses a power-saving opportunity;
+overestimation could wake the SA late and is therefore treated as a safety
+error.
+
+\subsubsection{Visible Next-SA Candidates}
+
+For each of the two resident tiles, the predictor identifies the first
+remaining instruction that can use the SA, i.e., the first
+\texttt{GEMM\_PRELOAD} or \texttt{GEMM}. The corresponding descriptor stores
+the candidate opcode, the number of preceding non-SA instructions, the total
+number of remaining tile instructions, and the state of at most two unique
+source operands. In the current ONNXim implementation, immutable SA
+descriptors are constructed once, after the tile instruction sequence has
+been generated and before core admission. A linear pass records every SA
+opcode and the number of non-SA instructions since the preceding SA
+instruction. During execution, an index selects the current descriptor and
+the prefix count decreases as preceding instructions issue. The simulator
+then supplies the current descriptor fields to the replayed RTL controller.
+
+The synthesized controller contains the descriptor registers, bound
+arithmetic, certificate pipeline, countdown, and clock-control logic. It does
+not contain a synthesized hardware implementation of the simulator's
+descriptor-generation pass. Therefore, the reported controller area and power do
+not include the upstream logic required to generate every descriptor field
+from a hardware instruction queue. This is not treated as a zero-cost
+operation. A physical implementation would require a compiler, instruction
+generator, or hardware producer to provide equivalent fields, but that
+producer and its cost are outside the evaluated RTL boundary. We report this
+boundary explicitly and do not claim that the synthesized controller
+represents the complete metadata-generation overhead.
+
+Let $P_i$ be the number of non-SA instructions before resident tile $i$'s
+first SA candidate. Because a core successfully issues at most one resident
+instruction per cycle, the candidate cannot issue within the next $P_i$
+cycles. If $P_i>0$, the tile-level lower bound is therefore
+\begin{equation}
+  C_i=P_i.
+  \label{eq:prefix-bound-overview}
+\end{equation}
+If $P_i=0$, the candidate is already at the tile head and its lower bound is
+instead derived from the readiness of its required operands. For operand
+$j$, the controller combines the core-FIFO and outstanding-response bounds,
+denoted $B^{\mathrm{fifo}}_{i,j}$ and
+$B^{\mathrm{resp}}_{i,j}$, as
+\begin{equation}
+  B_{i,j}=\max\!\left(B^{\mathrm{fifo}}_{i,j},
+                       B^{\mathrm{resp}}_{i,j}\right).
+  \label{eq:operand-combined-bound}
+\end{equation}
+Both operands must be ready before execution, so the head-candidate bound is
+\begin{equation}
+  C_i=\max_j B_{i,j}, \qquad P_i=0.
+  \label{eq:head-candidate-bound}
+\end{equation}
+The detailed construction of the prefix, FIFO-ticket, and response-drain
+bounds is presented in Section~\ref{sec:causal-bound-components}.
+
+The earliest visible SA use is the minimum over all committed or resident
+candidates:
+\begin{equation}
+  V=\min\!\left(C_0,C_1,C_{\mathrm{pipe}},C_{\mathrm{ex}}\right),
+  \label{eq:visible-frontier}
+\end{equation}
+where $C_{\mathrm{pipe}}$ represents an already committed future SA start and
+$C_{\mathrm{ex}}=0$ when the execution-queue head is an SA instruction. A
+zero bound conservatively prevents power-state entry.
+
+\subsubsection{Unknown-Future-Work Cap}
+
+A bound derived only from resident tiles must not extend beyond the point at
+which an unknown scheduler tile could replace a resident tile. Let $N_i$ be
+the number of instructions remaining in resident tile $i$. Since at most one
+resident instruction is issued successfully per cycle, tile $i$ cannot retire
+before
+\begin{equation}
+  R_i=\max(1,N_i,C_i).
+  \label{eq:retirement-bound}
+\end{equation}
+If a tile has no remaining SA candidate, the $C_i$ term is omitted and its
+retirement bound is $\max(1,N_i)$.
+The first resident slot that can become free limits the prediction horizon:
+\begin{equation}
+  U=\min(R_0,R_1).
+  \label{eq:future-tile-cap}
+\end{equation}
+If fewer than two tiles are resident, an unknown tile may be admitted on the
+next cycle and the implementation sets $U=1$. The ordinary causal horizon is
+then
+\begin{equation}
+  H=\begin{cases}
+      \min(V,U), & \text{if a visible SA candidate exists},\\
+      U,         & \text{otherwise}.
+    \end{cases}
+  \label{eq:safe-horizon}
+\end{equation}
+This cap is a conservatism mechanism: it can shorten a valid opportunity, but
+it prevents unseen future work from extending an OFF interval.
+
+The implemented controller contains one additional work-drain case. When the
+one-cycle unknown-tile cap is the only binding limit and no tile is waiting at
+the scheduler, the controller may replace that cap with a global lower bound
+on the remaining work that must drain before another tile can be admitted.
+If this extension is used, entry is cancelled if scheduler work appears while
+the three-stage certificate is being formed.
+
+\subsubsection{Non-Retentive Eligibility}
+
+The target SA loses its resident weight state while OFF. Therefore, a long
+idle-time bound alone is insufficient. Entry is considered only when
+\begin{enumerate}
+  \item the SA is inactive;
+  \item the SA compute pipeline and execution queue are empty;
+  \item both resident slots are occupied;
+  \item the first SA candidate in each resident tile exists and is
+        \texttt{GEMM\_PRELOAD}; and
+  \item core request-FIFO ticket ordering remains exact.
+\end{enumerate}
+Requiring \texttt{GEMM\_PRELOAD} ensures that every visible next SA user
+reloads the weights before computation. A visible \texttt{GEMM} would depend
+on the weights currently retained in the array and therefore disables
+non-retentive entry.
+
+The final RTL forms the certificate through three registered stages. Its
+electrical break-even parameter is 166 cycles and its wake guard is one
+cycle. Consequently, a fresh bound must contain at least
+\begin{equation}
+  166 + 1 + 3 = 170 \text{ cycles}
+  \label{eq:pipelined-entry-threshold}
+\end{equation}
+before entering the three-stage certificate pipeline. The pipeline subtracts
+its three elapsed cycles, and the control domain commits sleep only if at
+least $166+1=167$ certified cycles remain. Once committed, the deadline is
+frozen: the controller only decrements the saved countdown and never extends
+it using newer observations. It wakes immediately if SA activity appears, a
+resident descriptor changes, the SA compute pipeline or execution queue
+becomes nonempty, ticket ordering becomes inexact, or the countdown reaches
+the one-cycle wake guard.
+
+This design separates prediction from observation. Measured future idle
+lengths are used only after execution to evaluate coverage and detect safety
+violations; they never participate in the certificate used to request the
+power-state transition.

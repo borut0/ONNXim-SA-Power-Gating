@@ -144,8 +144,41 @@ typedef struct {
   bool last_inst = false;
   uint64_t measurement_tile_id = 0;
   Tile* my_tile;
+
+  // Immutable, tile-generation metadata for systolic-array analysis. A
+  // nonzero id denotes an exact interned weight-address/mapping signature,
+  // not a scratchpad address (which can alias across tiles).
+  uint64_t tile_instruction_ordinal = 0;
+  uint64_t sa_weight_block_id = 0;
+  bool sa_weight_block_known = false;
+  // Boundary metadata for the assumed analytical two-bank model.  This is a
+  // tile-local preload generation, not a physical bank selection.
+  uint64_t sa_preload_sequence = 0;
+  // Analytical preload boundary for an existing native GEMM.  This never
+  // changes the opcode or ONNXim timing; it is consumed only by the updated
+  // two-bank shadow and its causal safety predictor.
+  bool sa_analytical_preload_boundary = false;
   std::string to_string();
 } Instruction;
+
+struct SaInstructionDescriptor {
+  struct PlannedMemorySource {
+    addr_type address = 0;
+    size_t producer_instruction_ordinal = 0;
+    uint64_t request_count = 0;
+    uint64_t cumulative_request_count_through_producer = 0;
+  };
+  Instruction* instruction = nullptr;
+  Opcode opcode = Opcode::BAR;
+  size_t instruction_ordinal = 0;
+  size_t prefix_from_previous_sa = 0;
+  uint64_t weight_block_id = 0;
+  bool weight_block_known = false;
+  uint64_t preload_sequence = 0;
+  bool analytical_preload_boundary = false;
+  std::vector<PlannedMemorySource> planned_memory_sources;
+  bool memory_plan_complete = false;
+};
 
 struct Tile {
   enum class Status {
@@ -177,11 +210,41 @@ struct Tile {
   bool inst_finished = false;
   uint64_t measurement_tile_id = 0;
 
+  // Immutable SA descriptors are finalized after tile generation. Runtime
+  // state advances by descriptor index and never scans the instruction deque.
+  std::vector<SaInstructionDescriptor> sa_descriptors;
+  size_t next_sa_descriptor_index = 0;
+  bool sa_metadata_finalized = false;
+
+  // Cached current descriptor for the existing controller/predictor interface.
+  // The raw pointer observes an Instruction owned by `instructions`; the
+  // pointed-to object remains stable until that instruction is issued.
+  bool next_sa_candidate_found = false;
+  Opcode next_sa_opcode = Opcode::BAR;
+  size_t next_sa_prefix_count = 0;
+  Instruction* next_sa_instruction = nullptr;
+  uint64_t next_sa_weight_block_id = 0;
+  bool next_sa_weight_block_known = false;
+  uint64_t next_sa_preload_sequence = 0;
+  bool next_sa_analytical_preload_boundary = false;
+  uint64_t issued_planned_memory_requests = 0;
+  bool issued_planned_memory_requests_valid = true;
+
+  void finalize_sa_metadata();
+  void reset_runtime_sa_metadata();
+  void advance_sa_metadata(const Instruction* issued_instruction);
+
   //for analysis
   cycle_type last_gemm_cycle = 0;
   bool last_gemm_seen = false;
   //end
 } ;
+
+// Returns a stable process-local identity for an exact global weight-address
+// set and PE mapping. Equal keys receive equal ids; zero means unknown.
+uint64_t intern_sa_weight_block(
+    const std::vector<addr_type>& global_weight_addresses,
+    uint32_t tile_m, uint32_t tile_k);
 
 uint32_t generate_id();
 uint32_t generate_mem_access_id();

@@ -1,0 +1,1390 @@
+{
+  "array_columns": 128,
+  "array_rows": 128,
+  "clipped_dimension_intervals": 0,
+  "core_cycles": 1850092,
+  "core_ids": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "granularities": [
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 62939.30773705643,
+      "capacity_region_cycles": 30311907328,
+      "conservative_available_region_cycles": 27601818880,
+      "conservative_available_region_percent": 91.05932721859237,
+      "conservative_reserved_region_cycles": 2710088448,
+      "conservative_reserved_region_percent": 8.940672781407628,
+      "conservative_spatially_available_percent_during_commitment": 80.8922233969679,
+      "conservative_spatially_available_region_cycles_during_commitment": 11473081600,
+      "conservative_temporally_uncommitted_region_cycles": 16128737280,
+      "idle_episode_count": 440064,
+      "idle_episode_cycles": 27697323520,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 16384,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 13312,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 13312,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 3072,
+          "length_cycles": 1229
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 8192,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 8192,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 16384,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 3904,
+          "length_cycles": 203478
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 211179
+        },
+        {
+          "episode_count": 3904,
+          "length_cycles": 234170
+        },
+        {
+          "episode_count": 3904,
+          "length_cycles": 264871
+        },
+        {
+          "episode_count": 3904,
+          "length_cycles": 295571
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 325036
+        },
+        {
+          "episode_count": 4096,
+          "length_cycles": 333269
+        },
+        {
+          "episode_count": 12288,
+          "length_cycles": 335592
+        },
+        {
+          "episode_count": 12288,
+          "length_cycles": 344178
+        },
+        {
+          "episode_count": 8192,
+          "length_cycles": 352747
+        },
+        {
+          "episode_count": 8192,
+          "length_cycles": 360688
+        }
+      ],
+      "longest_idle_episode_cycles": 360688,
+      "modeled_active_region_cycles": 2614583808,
+      "modeled_active_region_percent": 8.625599767471023,
+      "modeled_idle_region_cycles": 27697323520,
+      "modeled_idle_region_percent": 91.37440023252897,
+      "region_columns": 128,
+      "region_count_per_core": 16384,
+      "region_rows": 128,
+      "region_size_columns": 1,
+      "region_size_rows": 1,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 81.39570171736614,
+      "spatially_idle_region_cycles_during_sa_active": 11439070720,
+      "temporally_idle_region_cycles": 16258252800
+    },
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 62310.37122969838,
+      "capacity_region_cycles": 473623552,
+      "conservative_available_region_cycles": 428194960,
+      "conservative_available_region_percent": 90.40829118227634,
+      "conservative_reserved_region_cycles": 45428592,
+      "conservative_reserved_region_percent": 9.59170881772366,
+      "conservative_spatially_available_percent_during_commitment": 79.50084587464998,
+      "conservative_spatially_available_region_cycles_during_commitment": 176183440,
+      "conservative_temporally_uncommitted_region_cycles": 252011520,
+      "idle_episode_count": 6896,
+      "idle_episode_cycles": 429692320,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 256,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 208,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 208,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 48,
+          "length_cycles": 1229
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 128,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 128,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 256,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 203478
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 211179
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 234170
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 264871
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 295571
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 325036
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 333269
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 335592
+        },
+        {
+          "episode_count": 192,
+          "length_cycles": 344178
+        },
+        {
+          "episode_count": 128,
+          "length_cycles": 352747
+        },
+        {
+          "episode_count": 128,
+          "length_cycles": 360688
+        }
+      ],
+      "longest_idle_episode_cycles": 360688,
+      "modeled_active_region_cycles": 43931232,
+      "modeled_active_region_percent": 9.275558999228146,
+      "modeled_idle_region_cycles": 429692320,
+      "modeled_idle_region_percent": 90.72444100077185,
+      "region_columns": 16,
+      "region_count_per_core": 256,
+      "region_rows": 16,
+      "region_size_columns": 8,
+      "region_size_rows": 8,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 79.9938240804321,
+      "spatially_idle_region_cycles_during_sa_active": 175657120,
+      "temporally_idle_region_cycles": 254035200
+    },
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 61168.875576036866,
+      "capacity_region_cycles": 118405888,
+      "conservative_available_region_cycles": 105811768,
+      "conservative_available_region_percent": 89.36360326945903,
+      "conservative_reserved_region_cycles": 12594120,
+      "conservative_reserved_region_percent": 10.636396730540968,
+      "conservative_spatially_available_percent_during_commitment": 77.26816565627628,
+      "conservative_spatially_available_region_cycles_during_commitment": 42808888,
+      "conservative_temporally_uncommitted_region_cycles": 63002880,
+      "idle_episode_count": 1736,
+      "idle_episode_cycles": 106189168,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 64,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 56,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 1229
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 32,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 32,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 64,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 203478
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 211179
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 234170
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 264871
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 295571
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 325036
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 333269
+        },
+        {
+          "episode_count": 48,
+          "length_cycles": 335592
+        },
+        {
+          "episode_count": 48,
+          "length_cycles": 344178
+        },
+        {
+          "episode_count": 32,
+          "length_cycles": 352747
+        },
+        {
+          "episode_count": 32,
+          "length_cycles": 360688
+        }
+      ],
+      "longest_idle_episode_cycles": 360688,
+      "modeled_active_region_cycles": 12216720,
+      "modeled_active_region_percent": 10.317662581104075,
+      "modeled_idle_region_cycles": 106189168,
+      "modeled_idle_region_percent": 89.68233741889593,
+      "region_columns": 8,
+      "region_count_per_core": 64,
+      "region_rows": 8,
+      "region_size_columns": 16,
+      "region_size_rows": 16,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 77.74614201758753,
+      "spatially_idle_region_cycles_during_sa_active": 42680368,
+      "temporally_idle_region_cycles": 63508800
+    },
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 58932.58181818182,
+      "capacity_region_cycles": 29601472,
+      "conservative_available_region_cycles": 25834456,
+      "conservative_available_region_percent": 87.27422744382442,
+      "conservative_reserved_region_cycles": 3767016,
+      "conservative_reserved_region_percent": 12.725772556175585,
+      "conservative_spatially_available_percent_during_commitment": 72.80280521952888,
+      "conservative_spatially_available_region_cycles_during_commitment": 10083736,
+      "conservative_temporally_uncommitted_region_cycles": 15750720,
+      "idle_episode_count": 440,
+      "idle_episode_cycles": 25930336,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 16,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 16,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 203478
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 211179
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 234170
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 264871
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 295571
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 325036
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 333269
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 335592
+        },
+        {
+          "episode_count": 12,
+          "length_cycles": 344178
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 352747
+        },
+        {
+          "episode_count": 8,
+          "length_cycles": 360688
+        }
+      ],
+      "longest_idle_episode_cycles": 360688,
+      "modeled_active_region_cycles": 3671136,
+      "modeled_active_region_percent": 12.401869744855931,
+      "modeled_idle_region_cycles": 25930336,
+      "modeled_idle_region_percent": 87.59813025514407,
+      "region_columns": 4,
+      "region_count_per_core": 16,
+      "region_rows": 4,
+      "region_size_columns": 32,
+      "region_size_rows": 32,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 73.25077789189838,
+      "spatially_idle_region_cycles_during_sa_active": 10053136,
+      "temporally_idle_region_cycles": 15877200
+    },
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 55131.67857142857,
+      "capacity_region_cycles": 7400368,
+      "conservative_available_region_cycles": 6150268,
+      "conservative_available_region_percent": 83.1075968114018,
+      "conservative_reserved_region_cycles": 1250100,
+      "conservative_reserved_region_percent": 16.892403188598188,
+      "conservative_spatially_available_percent_during_commitment": 63.897989076694174,
+      "conservative_spatially_available_region_cycles_during_commitment": 2212588,
+      "conservative_temporally_uncommitted_region_cycles": 3937680,
+      "idle_episode_count": 112,
+      "idle_episode_cycles": 6174748,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 4,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 4,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 211179
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 325036
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 333269
+        },
+        {
+          "episode_count": 3,
+          "length_cycles": 335592
+        },
+        {
+          "episode_count": 3,
+          "length_cycles": 344178
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 352747
+        },
+        {
+          "episode_count": 2,
+          "length_cycles": 360688
+        }
+      ],
+      "longest_idle_episode_cycles": 360688,
+      "modeled_active_region_cycles": 1225620,
+      "modeled_active_region_percent": 16.561608828101523,
+      "modeled_idle_region_cycles": 6174748,
+      "modeled_idle_region_percent": 83.43839117189847,
+      "region_columns": 2,
+      "region_count_per_core": 4,
+      "region_rows": 2,
+      "region_size_columns": 64,
+      "region_size_rows": 64,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 64.27876101552053,
+      "spatially_idle_region_cycles_during_sa_active": 2205448,
+      "temporally_idle_region_cycles": 3969300
+    },
+    {
+      "accounting_exact": true,
+      "average_idle_episode_cycles": 28352.14285714286,
+      "capacity_region_cycles": 1850092,
+      "conservative_available_region_cycles": 984420,
+      "conservative_available_region_percent": 53.20924581047861,
+      "conservative_reserved_region_cycles": 865672,
+      "conservative_reserved_region_percent": 46.79075418952139,
+      "conservative_spatially_available_percent_during_commitment": 0.0,
+      "conservative_spatially_available_region_cycles_during_commitment": 0,
+      "conservative_temporally_uncommitted_region_cycles": 984420,
+      "idle_episode_count": 35,
+      "idle_episode_cycles": 992325,
+      "idle_episode_length_histogram": [
+        {
+          "episode_count": 1,
+          "length_cycles": 19
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 21
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 41
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 44
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 479
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 521
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 566
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 610
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 777
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 780
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 784
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 785
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 2119
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 4872
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 14338
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 14887
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 17981
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 20058
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 20129
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 20401
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 21162
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 22123
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 24580
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 26354
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 26381
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 31144
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 40282
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 40373
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 42243
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 59350
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 66272
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 70621
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 93080
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 96969
+        },
+        {
+          "episode_count": 1,
+          "length_cycles": 211179
+        }
+      ],
+      "longest_idle_episode_cycles": 211179,
+      "modeled_active_region_cycles": 857767,
+      "modeled_active_region_percent": 46.363478140546526,
+      "modeled_idle_region_cycles": 992325,
+      "modeled_idle_region_percent": 53.636521859453474,
+      "region_columns": 1,
+      "region_count_per_core": 1,
+      "region_rows": 1,
+      "region_size_columns": 128,
+      "region_size_rows": 128,
+      "shortest_idle_episode_cycles": 19,
+      "spatially_idle_percent_during_sa_active": 0.0,
+      "spatially_idle_region_cycles_during_sa_active": 0,
+      "temporally_idle_region_cycles": 992325
+    }
+  ],
+  "interpretation": "Measurement-only packed tile_m-by-tile_k stationary-footprint occupancy. Modeled spatial idleness uses ONNXim's start-to-finish SA-active intervals, so the 128x128 modeled-idle result equals whole-SA idle. A separate conservative issue-to-finish reservation view is also reported. Neither view is cycle-accurate PE wavefront activity or an energy-saving claim. Version 3 also retains compact continuous idle-episode histograms for plug-in break-even analysis.",
+  "invalid_dimension_intervals": 0,
+  "sa_instruction_intervals": 941,
+  "source_core_count": 4,
+  "validation_errors": [],
+  "validation_pass": true,
+  "version": 3,
+  "whole_sa_active_cycles": 857767,
+  "whole_sa_active_percent": 46.363478140546526,
+  "whole_sa_average_idle_episode_cycles": 28352.14285714286,
+  "whole_sa_committed_cycles": 865672,
+  "whole_sa_idle_cycles": 992325,
+  "whole_sa_idle_episode_count": 35,
+  "whole_sa_idle_episode_cycles": 992325,
+  "whole_sa_idle_episode_length_histogram": [
+    {
+      "episode_count": 1,
+      "length_cycles": 19
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 21
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 41
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 44
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 479
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 521
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 566
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 610
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 777
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 780
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 784
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 785
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 2119
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 4872
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 14338
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 14887
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 17981
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 20058
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 20129
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 20401
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 21162
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 22123
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 24580
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 26354
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 26381
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 31144
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 40282
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 40373
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 42243
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 59350
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 66272
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 70621
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 93080
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 96969
+    },
+    {
+      "episode_count": 1,
+      "length_cycles": 211179
+    }
+  ],
+  "whole_sa_idle_percent": 53.636521859453474,
+  "whole_sa_longest_idle_episode_cycles": 211179,
+  "whole_sa_shortest_idle_episode_cycles": 19,
+  "whole_sa_uncommitted_cycles": 984420
+}

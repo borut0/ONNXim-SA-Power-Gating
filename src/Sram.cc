@@ -49,7 +49,26 @@ Sram::EntryState Sram::get_entry_state(addr_type address, int buffer_id) const {
                         iter->second.memory_tail_core_queue_ticket};
 }
 
-void Sram::cycle() {}
+bool Sram::cycle() {
+  const bool idle = _reads_this_cycle == 0 && _writes_this_cycle == 0;
+  _modeled_cycles++;
+  if (idle) _modeled_idle_cycles++;
+  if (_reads_this_cycle != 0) _modeled_read_active_cycles++;
+  if (_writes_this_cycle != 0) _modeled_write_active_cycles++;
+  _modeled_read_events += _reads_this_cycle;
+  _modeled_write_events += _writes_this_cycle;
+  _reads_this_cycle = 0;
+  _writes_this_cycle = 0;
+  return idle;
+}
+
+void Sram::record_modeled_read(addr_type address, int buffer_id,
+                               uint64_t access_count) {
+  assert(buffer_id >= 0 && buffer_id < 2);
+  assert(check_allocated(address, buffer_id));
+  assert(_cache_table[buffer_id].at(address).valid);
+  _reads_this_cycle += access_count;
+}
 
 void Sram::flush(int buffer_id) {
   _current_size[buffer_id] = 0;
@@ -95,6 +114,7 @@ int Sram::prefetch(addr_type address, int buffer_id, size_t allocated_size,
 
 void Sram::fill(addr_type address, int buffer_id, PendingProducer completed_producer) {
   assert(check_allocated(address, buffer_id));
+  _writes_this_cycle++;
   SramEntry& entry = _cache_table[buffer_id].at(address);
   assert(entry.remain_req_count > 0 && !entry.valid);
 

@@ -43,6 +43,15 @@ def main():
 
     cores = records["COMPONENT_CORE"]
     sa_states = records["SA_STATE_BREAKDOWN"]
+    if cores and any(record.get("version") != 2 for record in cores):
+        raise SystemExit("COMPONENT_CORE schema v2 required; rerun the workload")
+    if records["COMPONENT_NOC"] and any(
+            record.get("version") != 2 for record in records["COMPONENT_NOC"]):
+        raise SystemExit("COMPONENT_NOC schema v2 required; v1 demand-idle is rejected")
+    if records["COMPONENT_DRAM"] and any(
+            record.get("version") != 2 for record in records["COMPONENT_DRAM"]):
+        raise SystemExit("COMPONENT_DRAM schema v2 required; v1 demand-idle is rejected")
+
     total_core_cycles = sum(record["core_cycles"] for record in cores)
 
     core_fields = (
@@ -61,6 +70,22 @@ def main():
         {field.replace("_cycles", "_percent"): percentage(value, total_core_cycles)
          for field, value in list(aggregate_core.items())}
     )
+    for name in ("main", "accumulator"):
+        prefix = f"{name}_spad"
+        for field in ("modeled_idle_cycles", "modeled_active_cycles",
+                      "modeled_read_active_cycles",
+                      "modeled_write_active_cycles",
+                      "modeled_read_events", "modeled_write_events"):
+            aggregate_core[f"{prefix}_{field}"] = sum(
+                r["spad_model"][name][field] for r in cores)
+    aggregate_core["all_sram_devices_modeled_idle_cycles"] = sum(
+        r["spad_model"]["all_devices_modeled_idle_cycles"] for r in cores)
+    aggregate_core["all_sram_devices_modeled_active_cycles"] = sum(
+        r["spad_model"]["all_devices_modeled_active_cycles"] for r in cores)
+    aggregate_core["all_sram_devices_modeled_idle_percent"] = percentage(
+        aggregate_core["all_sram_devices_modeled_idle_cycles"],
+        total_core_cycles)
+
 
     attribution_names = (
         "compute", "memory_stall", "dependency_stall", "scheduler_stall", "other"
@@ -122,6 +147,38 @@ def main():
             "dram_drained": dram["outstanding_requests_at_end"] == 0,
             "dram_request_completion_exact":
                 dram["accepted_requests"] == dram["completed_requests"],
+            "noc_modeled_quiescence_available":
+                noc["modeled_quiescence_available"] is True,
+            "dram_modeled_quiescence_available":
+                dram["modeled_quiescence_available"] is True,
+            "noc_modeled_cycle_accounting_exact":
+                noc["modeled_quiescent_cycles"] is not None and
+                noc["modeled_active_cycles"] is not None and
+                noc["modeled_quiescent_cycles"] +
+                noc["modeled_active_cycles"] == noc["icnt_cycles"],
+            "dram_modeled_cycle_accounting_exact":
+                dram["modeled_quiescent_cycles"] is not None and
+                dram["modeled_active_cycles"] is not None and
+                dram["modeled_quiescent_cycles"] +
+                dram["modeled_active_cycles"] == dram["dram_cycles"],
+            "noc_quiescent_subset_of_zero_outstanding":
+                noc["modeled_quiescent_cycles"] is not None and
+                noc["modeled_quiescent_cycles"] <=
+                noc["zero_outstanding_boundary_cycles"],
+            "dram_quiescent_subset_of_zero_outstanding":
+                dram["modeled_quiescent_cycles"] is not None and
+                dram["modeled_quiescent_cycles"] <=
+                dram["zero_outstanding_cycles"],
+            "spad_modeled_cycle_accounting_exact": all(
+                r["spad_model"][name]["modeled_cycles"] == r["core_cycles"] and
+                r["spad_model"][name]["modeled_idle_cycles"] +
+                r["spad_model"][name]["modeled_active_cycles"] ==
+                r["core_cycles"]
+                for r in cores for name in ("main", "accumulator")),
+            "all_sram_devices_cycle_accounting_exact": all(
+                r["spad_model"]["all_devices_modeled_idle_cycles"] +
+                r["spad_model"]["all_devices_modeled_active_cycles"] ==
+                r["core_cycles"] for r in cores),
         })
 
     result = {
@@ -150,8 +207,9 @@ def main():
         ),
         "interpretation_limits": [
             "SA and vector active percentages may overlap and are reported separately.",
-            "NoC demand-active means at least one ONNXim memory packet is in flight; it is not router-level link utilization.",
-            "DRAM demand-active means accepted-but-not-completed demand occupancy; transaction bandwidth utilization is reported separately.",
+            "NoC modeled quiescence requires pre/post empty adapter and BookSim structures plus no packet boundary event; unsupported router types are unavailable.",
+            "DRAM modeled quiescence is Ramulator2 queue/command/completion/maintenance quiescence, not physical data-bus or timing-recovery idleness.",
+            "SPAD modeled idleness uses explicit accepted-EX/MOVOUT read and fill write events; bank, port, access latency, and physical SRAM activity are not modeled.",
             "Memory-stage averages are request-weighted; component active percentages are cycle-weighted.",
         ],
     }

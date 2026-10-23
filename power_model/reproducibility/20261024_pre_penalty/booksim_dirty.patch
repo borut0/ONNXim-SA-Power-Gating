@@ -1,0 +1,275 @@
+diff --git a/include/booksim2/Interconnect.hpp b/include/booksim2/Interconnect.hpp
+index feebab3..d702fd8 100644
+--- a/include/booksim2/Interconnect.hpp
++++ b/include/booksim2/Interconnect.hpp
+@@ -17,6 +17,28 @@ class OutputSet;
+ namespace booksim2 {
+ class Interconnect {
+ public:
++  struct QuiescenceStatus {
++    bool observable = false;
++    bool routers_quiescent = false;
++    bool flit_channels_empty = false;
++    bool credit_channels_empty = false;
++    bool injection_queues_empty = false;
++    bool source_buffer_states_quiescent = false;
++    bool ejection_buffers_empty = false;
++    bool boundary_buffers_empty = false;
++    bool retired_flit_queues_empty = false;
++    bool retired_packet_heads_empty = false;
++    bool in_flight_flits_empty = false;
++
++    bool quiescent() const {
++      return observable && routers_quiescent && flit_channels_empty &&
++             credit_channels_empty && injection_queues_empty &&
++             source_buffer_states_quiescent &&
++             ejection_buffers_empty && boundary_buffers_empty &&
++             retired_flit_queues_empty && retired_packet_heads_empty &&
++             in_flight_flits_empty;
++    }
++  };
+   enum class Type {
+     READ, WRITE, READ_REPLY, WRITE_REPLY, ANY
+   };
+@@ -46,6 +68,7 @@ public:
+ 
+   Stats* GetStats(const std::string &name);
+   void print_stats();
++  QuiescenceStatus get_quiescence_status();
+ 
+   // void register_stat(std::shared_ptr<CycleObjectStats> stats) override;
+ 
+diff --git a/src/GNNTrafficManager.cpp b/src/GNNTrafficManager.cpp
+index bce0ca2..66aa66f 100644
+--- a/src/GNNTrafficManager.cpp
++++ b/src/GNNTrafficManager.cpp
+@@ -49,6 +49,43 @@ GNNTrafficManager::GNNTrafficManager( const Configuration &config, const vector<
+   flit_size = config.GetInt("flit_size");
+ }
+ 
++bool GNNTrafficManager::InputQueuesEmpty() const {
++  for(const auto & subnet : _input_queue) {
++    for(const auto & node : subnet) {
++      for(const auto & queue : node) {
++        if(!queue.empty()) return false;
++      }
++    }
++  }
++  return true;
++}
++
++bool GNNTrafficManager::InFlightFlitsEmpty() const {
++  for(const auto & flits : _total_in_flight_flits) {
++    if(!flits.empty()) return false;
++  }
++  return true;
++}
++
++bool GNNTrafficManager::RetiredPacketsEmpty() const {
++  for(const auto & packets : _retired_packets) {
++    if(!packets.empty()) return false;
++  }
++  return true;
++}
++
++bool GNNTrafficManager::SourceBufferStatesQuiescent() const {
++  for(const auto & source : _buf_states) {
++    for(const BufferState * state : source) {
++      if(state->Occupancy() != 0) return false;
++      for(int vc = 0; vc < _vcs; ++vc) {
++        if(!state->IsAvailableFor(vc)) return false;
++      }
++    }
++  }
++  return true;
++}
++
+ GNNTrafficManager::~GNNTrafficManager()
+ {
+ }
+diff --git a/src/GNNTrafficManager.hpp b/src/GNNTrafficManager.hpp
+index 2513655..8ba0030 100644
+--- a/src/GNNTrafficManager.hpp
++++ b/src/GNNTrafficManager.hpp
+@@ -36,6 +36,10 @@ public:
+   
+   // correspond to TrafficManger::Run/SingleSim
+   void Init();
++  bool InputQueuesEmpty() const;
++  bool InFlightFlitsEmpty() const;
++  bool RetiredPacketsEmpty() const;
++  bool SourceBufferStatesQuiescent() const;
+   
+   // TODO: if it is not good...
+   friend class booksim2::Interconnect;
+diff --git a/src/Interconnect.cpp b/src/Interconnect.cpp
+index d305110..8d133b5 100644
+--- a/src/Interconnect.cpp
++++ b/src/Interconnect.cpp
+@@ -108,6 +108,71 @@ Stats* Interconnect::GetStats(const std::string &name) {
+   return test;
+ }
+ 
++Interconnect::QuiescenceStatus Interconnect::get_quiescence_status() {
++  QuiescenceStatus status;
++  status.observable = true;
++  status.routers_quiescent = true;
++  status.flit_channels_empty = true;
++  status.credit_channels_empty = true;
++  status.injection_queues_empty = true;
++  status.source_buffer_states_quiescent = true;
++  status.ejection_buffers_empty = true;
++  status.boundary_buffers_empty = true;
++  status.retired_flit_queues_empty = true;
++  status.retired_packet_heads_empty = true;
++  status.in_flight_flits_empty = true;
++
++  for(Network * net : nets) {
++    for(const Router * router : net->GetRouters()) {
++      if(!router->QuiescenceObservable()) {
++        status.observable = false;
++        status.routers_quiescent = false;
++      } else if(!router->IsQuiescent()) {
++        status.routers_quiescent = false;
++      }
++    }
++    auto check_flit_channels = [&](const auto & channels) {
++      for(const auto * channel : channels) {
++        if(channel->HasActivity()) status.flit_channels_empty = false;
++      }
++    };
++    auto check_credit_channels = [&](const auto & channels) {
++      for(const auto * channel : channels) {
++        if(channel->HasActivity()) status.credit_channels_empty = false;
++      }
++    };
++    check_flit_channels(net->GetInject());
++    check_flit_channels(net->GetEject());
++    check_flit_channels(net->GetChannels());
++    check_credit_channels(net->GetInjectCred());
++    check_credit_channels(net->GetEjectCred());
++    check_credit_channels(net->GetChannelsCred());
++  }
++
++  status.injection_queues_empty = traffic_manager->InputQueuesEmpty();
++  status.source_buffer_states_quiescent =
++      traffic_manager->SourceBufferStatesQuiescent();
++  status.in_flight_flits_empty = traffic_manager->InFlightFlitsEmpty();
++  status.retired_packet_heads_empty =
++      traffic_manager->RetiredPacketsEmpty();
++  for(int subnet = 0; subnet < num_subnets; ++subnet) {
++    for(int node = 0; node < num_nodes; ++node) {
++      if(!ejected_flit_queue[subnet][node].empty()) {
++        status.retired_flit_queues_empty = false;
++      }
++      for(int vc = 0; vc < vcs; ++vc) {
++        if(!ejection_buffer[subnet][node][vc].empty()) {
++          status.ejection_buffers_empty = false;
++        }
++        if(boundary_buffer[subnet][node][vc].size() != 0) {
++          status.boundary_buffers_empty = false;
++        }
++      }
++    }
++  }
++  return status;
++}
++
+ // bool Interconnect::done() const {
+ //   bool empty = true;
+ //   for (int subnet = 0; subnet < num_subnets; ++subnet) {
+diff --git a/src/channel.hpp b/src/channel.hpp
+index 27bded9..85790f4 100644
+--- a/src/channel.hpp
++++ b/src/channel.hpp
+@@ -69,6 +69,11 @@ public:
+   virtual void Evaluate() {}
+   virtual void WriteOutputs();
+ 
++  // Includes values at either endpoint as well as values delayed in flight.
++  bool HasActivity() const {
++    return _input != nullptr || _output != nullptr || !_wait_queue.empty();
++  }
++
+ protected:
+   int _delay;
+   T * _input;
+diff --git a/src/routers/iq_router.cpp b/src/routers/iq_router.cpp
+index 9ad77a6..465d535 100644
+--- a/src/routers/iq_router.cpp
++++ b/src/routers/iq_router.cpp
+@@ -288,6 +288,35 @@ void IQRouter::WriteOutputs( )
+   _SendCredits( );
+ }
+ 
++bool IQRouter::IsQuiescent() const
++{
++  if(_active || !_in_queue_flits.empty() || !_proc_credits.empty() ||
++     !_route_vcs.empty() || !_vc_alloc_vcs.empty() ||
++     !_sw_hold_vcs.empty() || !_sw_alloc_vcs.empty() ||
++     !_crossbar_flits.empty() || !_out_queue_credits.empty()) {
++    return false;
++  }
++  for(const Buffer * buffer : _buf) {
++    if(buffer->GetOccupancy() != 0) return false;
++    for(int vc = 0; vc < _vcs; ++vc) {
++      if(buffer->GetState(vc) != VC::idle) return false;
++    }
++  }
++  for(const BufferState * state : _next_buf) {
++    if(state->Occupancy() != 0) return false;
++    for(int vc = 0; vc < _vcs; ++vc) {
++      if(!state->IsAvailableFor(vc)) return false;
++    }
++  }
++  for(const auto & output : _output_buffer) {
++    if(!output.empty()) return false;
++  }
++  for(const auto & credits : _credit_buffer) {
++    if(!credits.empty()) return false;
++  }
++  return true;
++}
++
+ 
+ //------------------------------------------------------------------------------
+ // read inputs
+diff --git a/src/routers/iq_router.hpp b/src/routers/iq_router.hpp
+index ad3b640..1d7a6ac 100644
+--- a/src/routers/iq_router.hpp
++++ b/src/routers/iq_router.hpp
+@@ -174,6 +174,13 @@ public:
+   virtual vector<int> UsedCredits() const;
+   virtual vector<int> FreeCredits() const;
+   virtual vector<int> MaxCredits() const;
++  bool QuiescenceObservable() const override { return true; }
++  bool IsQuiescent() const override;
++  /*
++  bool IsActive() const override {
++    return _active;
++  }
++  */
+ 
+   SwitchMonitor const * const GetSwitchMonitor() const {return _switchMonitor;}
+   BufferMonitor const * const GetBufferMonitor() const {return _bufferMonitor;}
+diff --git a/src/routers/router.hpp b/src/routers/router.hpp
+index a34a117..ea06ff5 100644
+--- a/src/routers/router.hpp
++++ b/src/routers/router.hpp
+@@ -120,6 +120,16 @@ public:
+   virtual void Evaluate( );
+   virtual void WriteOutputs( ) = 0;
+ 
++  // Unsupported router implementations deliberately fail closed.
++  virtual bool QuiescenceObservable() const { return false; }
++  virtual bool IsQuiescent() const { return false; }
++
++  //for analysis
++
++  //virtual bool IsActive() const { return false; }
++
++  //end of analysis
++
+   void OutChannelFault( int c, bool fault = true );
+   bool IsFaultyOutput( int c ) const;
+ 

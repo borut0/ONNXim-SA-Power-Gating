@@ -1,0 +1,369 @@
+diff --git a/resources/ndp_wrappers/ramulator2.cc b/resources/ndp_wrappers/ramulator2.cc
+index c47a1b8..87ac74c 100644
+--- a/resources/ndp_wrappers/ramulator2.cc
++++ b/resources/ndp_wrappers/ramulator2.cc
+@@ -64,6 +64,10 @@ void Ramulator2::finish() {
+ }
+ 
+ void Ramulator2::cycle() {
++  const bool request_queue_empty_before = request_queue.empty();
++  const bool return_queue_empty_before = return_queue.empty();
++  const Ramulator::DRAMQuiescenceStatus before =
++      ramulator2_memorysystem->get_quiescence_status();
+   if (!request_queue.empty()) {
+     mem_fetch* mf = request_queue.front();
+     auto callback = [this, mf](Ramulator::Request& req) {
+@@ -83,7 +87,22 @@ void Ramulator2::cycle() {
+       request_queue.pop();
+   }
+   ramulator2_memorysystem->tick();
+-  if(cycle_count % log_interval == 0) {
++  const Ramulator::DRAMQuiescenceStatus after =
++      ramulator2_memorysystem->get_quiescence_status();
++  last_quiescence.observable = before.observable && after.observable;
++  last_quiescence.wrapper_request_queue_empty =
++      request_queue_empty_before && request_queue.empty();
++  last_quiescence.wrapper_return_queue_empty =
++      return_queue_empty_before && return_queue.empty();
++  last_quiescence.controller_queues_empty =
++      before.structurally_quiescent() && after.structurally_quiescent();
++  last_quiescence.command_issued_this_cycle =
++      after.command_issued_this_cycle;
++  last_quiescence.data_transfer_this_cycle =
++      after.data_transfer_this_cycle;
++  last_quiescence.maintenance_activity_this_cycle =
++      after.maintenance_activity_this_cycle;
++  if(log_interval > 0 && cycle_count % log_interval == 0) {
+     if(memory_id == 0)
+       spdlog::info("{}: BW utilization {}% ({} reads, {} writes)",
+                   std_name,
+diff --git a/resources/ndp_wrappers/ramulator2.hh b/resources/ndp_wrappers/ramulator2.hh
+index be03a3d..079dc34 100644
+--- a/resources/ndp_wrappers/ramulator2.hh
++++ b/resources/ndp_wrappers/ramulator2.hh
+@@ -27,6 +27,23 @@ struct mem_fetch {
+ 
+ class Ramulator2 {
+  public:
++  struct QuiescenceStatus {
++    bool observable = false;
++    bool wrapper_request_queue_empty = false;
++    bool wrapper_return_queue_empty = false;
++    bool controller_queues_empty = false;
++    bool command_issued_this_cycle = false;
++    bool data_transfer_this_cycle = false;
++    bool maintenance_activity_this_cycle = false;
++
++    bool quiescent() const {
++      return observable && wrapper_request_queue_empty &&
++             wrapper_return_queue_empty && controller_queues_empty &&
++             !command_issued_this_cycle &&
++             !data_transfer_this_cycle &&
++             !maintenance_activity_this_cycle;
++    }
++  };
+   Ramulator2() {}
+   Ramulator2(unsigned memory_id, unsigned num_channels,
+              std::string ramulator_config, std::string out, int log_interval, int nbl)
+@@ -48,6 +65,7 @@ class Ramulator2 {
+   mem_fetch *return_queue_pop();
+   void return_queue_push_back(mem_fetch *mf);
+   bool returnq_full() const;
++  QuiescenceStatus get_quiescence_status() const { return last_quiescence; }
+ 
+   // virtual bool is_active();
+   // virtual void set_dram_power_stats(unsigned &cmd, unsigned &activity,
+@@ -75,6 +93,7 @@ class Ramulator2 {
+   int tot_reqs;
+   int tot_reads;
+   int tot_writes;
++  QuiescenceStatus last_quiescence;
+ };
+ 
+ }  // namespace NDPSim
+diff --git a/src/dram/impl/HBM2.cpp b/src/dram/impl/HBM2.cpp
+index c5f0981..b7efc11 100644
+--- a/src/dram/impl/HBM2.cpp
++++ b/src/dram/impl/HBM2.cpp
+@@ -122,6 +122,10 @@ class HBM2 : public IDRAM, public Implementation {
+     FuncMatrix<RowhitFunc_t<Node>>  m_rowhits;
+     FuncMatrix<RowopenFunc_t<Node>> m_rowopens;
+ 
++    
++    // for experimental purposes
++    //uint64_t s_dram_commands = 0;
++    
+ 
+   public:
+     void tick() override {
+@@ -139,9 +143,16 @@ class HBM2 : public IDRAM, public Implementation {
+       set_rowopens();
+       
+       create_nodes();
++      //for experimental purposes
++      //register_stat(s_dram_commands)
++    //.name("dram_commands");
+     };
+ 
+     void issue_command(int command, const AddrVec_t& addr_vec) override {
++
++      //for experimental purposes
++      //s_dram_commands++;
++      //end of experimental purposes
+       int channel_id = addr_vec[m_levels["channel"]];
+       m_channels[channel_id]->update_timing(command, addr_vec, m_clk);
+       m_channels[channel_id]->update_states(command, addr_vec, m_clk);
+diff --git a/src/dram_controller/controller.h b/src/dram_controller/controller.h
+index f6e252b..2dd696c 100644
+--- a/src/dram_controller/controller.h
++++ b/src/dram_controller/controller.h
+@@ -14,8 +14,16 @@
+ #include "dram_controller/refresh.h"
+ 
+ 
+-namespace Ramulator {
+-
++namespace Ramulator {
++
++struct DRAMControllerQuiescenceStatus {
++  bool observable = false;
++  bool queues_empty = false;
++  bool command_issued_this_cycle = false;
++  bool data_transfer_this_cycle = false;
++  bool maintenance_activity_this_cycle = false;
++};
++
+ class IDRAMController : public Clocked<IDRAMController> {
+   RAMULATOR_REGISTER_INTERFACE(IDRAMController, "Controller", "Memory Controller Interface");
+ 
+@@ -45,7 +53,12 @@ class IDRAMController : public Clocked<IDRAMController> {
+      * @brief       Ticks the memory controller.
+      * 
+      */
+-    virtual void tick() = 0;
++    virtual void tick() = 0;
++
++    // Non-generic controllers fail closed instead of reporting false idle.
++    virtual DRAMControllerQuiescenceStatus get_quiescence_status() const {
++      return {};
++    }
+    
+ };
+ 
+diff --git a/src/dram_controller/impl/generic_dram_controller.cpp b/src/dram_controller/impl/generic_dram_controller.cpp
+index 71cd9cc..b58b498 100644
+--- a/src/dram_controller/impl/generic_dram_controller.cpp
++++ b/src/dram_controller/impl/generic_dram_controller.cpp
+@@ -23,8 +23,17 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+ 
+     size_t s_num_row_hits = 0;
+     size_t s_num_row_misses = 0;
+-    size_t s_num_row_conflicts = 0;
+-
++    size_t s_num_row_conflicts = 0;
++
++    bool m_command_issued_this_cycle = false;
++    bool m_data_transfer_this_cycle = false;
++    bool m_maintenance_activity_this_cycle = false;
++
++    /*
++    bool m_controller_was_idle = false;
++    Clk_t m_controller_idle_start = 0;
++    std::vector<Clk_t> m_controller_idle_intervals;
++    */
+ 
+   public:
+     void init() override {
+@@ -92,12 +101,18 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+     }
+ 
+     void tick() override {
+-      m_clk++;
++      m_clk++;
++      m_command_issued_this_cycle = false;
++      m_data_transfer_this_cycle = false;
++      m_maintenance_activity_this_cycle = false;
+ 
+       // 1. Serve completed reads
+       serve_completed_reads();
+ 
+-      m_refresh->tick();
++      m_refresh->tick();
++      if (m_priority_buffer.size() != 0) {
++        m_maintenance_activity_this_cycle = true;
++      }
+ 
+       // 2. Try to find a request to serve.
+       ReqBuffer::iterator req_it;
+@@ -124,6 +139,13 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+           }
+         }
+         // If we find a real request to serve
++        m_command_issued_this_cycle = true;
++        const bool maintenance_request =
++            req_it->type_id != Request::Type::Read &&
++            req_it->type_id != Request::Type::Write;
++        m_maintenance_activity_this_cycle =
++            m_maintenance_activity_this_cycle || maintenance_request ||
++            m_dram->m_command_meta(req_it->command).is_refreshing;
+         m_dram->issue_command(req_it->command, req_it->addr_vec);
+ 
+         // If we are issuing the last command, set depart clock cycle and move the request to the pending queue
+@@ -131,7 +153,8 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+           if (req_it->type_id == Request::Type::Read) {
+             req_it->depart = m_clk + m_dram->m_read_latency;
+             pending.push_back(*req_it);
+-          } else if (req_it->type_id == Request::Type::Write) {
++          } else if (req_it->type_id == Request::Type::Write) {
++            m_data_transfer_this_cycle = true;
+             // TODO: Add code to update statistics
+             if(req_it->callback)
+               req_it->callback(*req_it);
+@@ -145,11 +168,54 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+         }
+ 
+       }
+-
++      /*
++      bool controller_idle =
++      pending.empty() &&
++      m_active_buffer.size() == 0 &&
++      m_priority_buffer.size() == 0 &&
++      m_read_buffer.size() == 0 &&
++      m_write_buffer.size() == 0;
++
++      if (controller_idle && !m_controller_was_idle) {
++        m_controller_idle_start = m_clk;
++        m_controller_was_idle = true;
++      }
++      else if (!controller_idle && m_controller_was_idle) {
++        m_controller_idle_intervals.push_back(
++            m_clk - m_controller_idle_start);
++        m_controller_was_idle = false;
++      }
++        */
+     };
+ 
++    DRAMControllerQuiescenceStatus get_quiescence_status() const override {
++      DRAMControllerQuiescenceStatus status;
++      status.observable = true;
++      status.queues_empty = pending.empty() &&
++          m_active_buffer.size() == 0 &&
++          m_priority_buffer.size() == 0 &&
++          m_read_buffer.size() == 0 &&
++          m_write_buffer.size() == 0;
++      status.command_issued_this_cycle = m_command_issued_this_cycle;
++      status.data_transfer_this_cycle = m_data_transfer_this_cycle;
++      status.maintenance_activity_this_cycle =
++          m_maintenance_activity_this_cycle;
++      return status;
++    }
++
+     void finalize() override {
+       spdlog::info("Row hits: {}, Row misses: {}, Row conflicts: {}", s_num_row_hits, s_num_row_misses, s_num_row_conflicts);
++      /*
++      if (m_controller_was_idle) {
++          m_controller_idle_intervals.push_back(
++              m_clk - m_controller_idle_start);
++          m_controller_was_idle = false;
++      }
++
++      for (auto interval : m_controller_idle_intervals) {
++          spdlog::info("Controller idle = {}", interval);
++      }
++      */
+     }
+   private:
+     /**
+@@ -165,12 +231,13 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+         auto& req = pending[0];
+         if (req.depart <= m_clk) {
+           // Request received data from dram
++          m_data_transfer_this_cycle = true;
+           if (req.depart - req.arrive > 1) {
+             // Check if this requests accesses the DRAM or is being forwarded.
+             // TODO add the stats back
+           }
+ 
+-          if (req.callback) {
++          if (req.callback) {
+             // If the request comes from outside (e.g., processor), call its callback
+             req.callback(req);
+           }
+diff --git a/src/memory_system/impl/generic_DRAM_system.cpp b/src/memory_system/impl/generic_DRAM_system.cpp
+index a7cce15..a935e15 100644
+--- a/src/memory_system/impl/generic_DRAM_system.cpp
++++ b/src/memory_system/impl/generic_DRAM_system.cpp
+@@ -80,6 +80,28 @@ class GenericDRAMSystem final : public IMemorySystem, public Implementation {
+       }
+     };
+ 
++    DRAMQuiescenceStatus get_quiescence_status() const override {
++      DRAMQuiescenceStatus status;
++      status.observable = true;
++      status.queues_empty = true;
++      for (const IDRAMController* controller : m_controllers) {
++        DRAMControllerQuiescenceStatus controller_status =
++            controller->get_quiescence_status();
++        if (!controller_status.observable) status.observable = false;
++        if (!controller_status.queues_empty) status.queues_empty = false;
++        status.command_issued_this_cycle =
++            status.command_issued_this_cycle ||
++            controller_status.command_issued_this_cycle;
++        status.data_transfer_this_cycle =
++            status.data_transfer_this_cycle ||
++            controller_status.data_transfer_this_cycle;
++        status.maintenance_activity_this_cycle =
++            status.maintenance_activity_this_cycle ||
++            controller_status.maintenance_activity_this_cycle;
++      }
++      return status;
++    }
++
+     float get_tCK() override {
+       return m_dram->m_timing_vals("tCK_ps") / 1000.0f;
+     }
+diff --git a/src/memory_system/memory_system.h b/src/memory_system/memory_system.h
+index 10b06e0..4578b22 100644
+--- a/src/memory_system/memory_system.h
++++ b/src/memory_system/memory_system.h
+@@ -10,8 +10,25 @@
+ #include "frontend/frontend.h"
+ 
+ 
+-namespace Ramulator {
+-
++namespace Ramulator {
++
++struct DRAMQuiescenceStatus {
++  bool observable = false;
++  bool queues_empty = false;
++  bool command_issued_this_cycle = false;
++  bool data_transfer_this_cycle = false;
++  bool maintenance_activity_this_cycle = false;
++
++  bool structurally_quiescent() const {
++    return observable && queues_empty;
++  }
++  bool quiescent() const {
++    return structurally_quiescent() && !command_issued_this_cycle &&
++           !data_transfer_this_cycle &&
++           !maintenance_activity_this_cycle;
++  }
++};
++
+ class IMemorySystem : public TopLevel<IMemorySystem> {
+   RAMULATOR_REGISTER_INTERFACE(IMemorySystem, "MemorySystem", "Memory system interface (e.g., communicates between processor and memory controller).")
+ 
+@@ -55,7 +72,10 @@ class IMemorySystem : public TopLevel<IMemorySystem> {
+      * @brief         Ticks the memory system
+      * 
+      */
+-    virtual void tick() = 0;
++    virtual void tick() = 0;
++
++    // Non-generic systems fail closed instead of reporting false idle.
++    virtual DRAMQuiescenceStatus get_quiescence_status() const { return {}; }
+ 
+     /**
+      * @brief    Returns 

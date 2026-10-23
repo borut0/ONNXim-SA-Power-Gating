@@ -152,7 +152,6 @@ void Attention::initialize_tiles(MappingTable& mapping_table) {
 }
 
 void Attention::initialize_onnx_tiles(MappingTable& mapping_table) {
-    calculate_loops();
     /* Check using fusion */
     if (!use_fused) {
         initialize_non_fused_tiles(mapping_table);
@@ -195,159 +194,52 @@ void Attention::initialize_onnx_tiles(MappingTable& mapping_table) {
     _model->add_tensor(std::move(query_projection));
     _model->add_tensor(std::move(value_projection));
 
-    /* Fused Attention body */
+    /*
+     * Build the fused body with the same physical, SA-sized QK/PV mapping
+     * used by generated language models.  The former ONNX-only generator
+     * emitted one native GEMM for an entire head and merely annotated it as
+     * an analytical preload boundary.  Such an instruction neither loads a
+     * physical weight generation nor necessarily fits the array footprint.
+     */
+    Mapping mapping;
+    calculate_loops(mapping);
+    spdlog::info("ONNX attention mapping info {}", mapping.to_string());
+    int core_id = -1;
     for (int req_idx = 0; req_idx < _batch_size; req_idx++) {
-        int heads_per_tile = _heads_per_tile[req_idx];
-        for (int head_off=0; head_off<_nh; head_off+=heads_per_tile) {
-            uint32_t remain_heads = std::min(_nh-head_off, (uint32_t)heads_per_tile);
-            std::unique_ptr<Tile> tile = std::make_unique<Tile>(Tile{
-                .status = Tile::Status::INITIALIZED,
-                .optype = get_name(),
-                .layer_id = _id,
-                .fused_op_id = fused_op_id++,
-                //.K = 0,
-                .accum = false,
-            });
-            /* dummy mapping */
-            _tiles.push_back(std::move(tile));
-            initialize_instructions(_tiles.back().get(), head_off, heads_per_tile);
-        }
-    }
-}
-
-// 일단 한 tile에는 최대 하나의 request만 있는 경우부터.
-void Attention::initialize_instructions(Tile* tile, int head_idx, int num_heads) {
-    // head_idx # start idx
-    // num_heads
-    uint32_t q_len = _q_len;
-    uint32_t seq_len = _seq;
-    uint32_t value_offset = ceil_div(num_heads, _nkvh);
-    addr_type sram_query_base = SPAD_BASE;
-    addr_type sram_key_base = sram_query_base + q_len * _dk * num_heads * _config.precision;
-    addr_type sram_value_base = sram_key_base + _dk * seq_len * value_offset * _config.precision;
-    addr_type sram_logit_base = ACCUM_SPAD_BASE;  // for logits
-
-    addr_type query_addr = get_operand_addr(_INPUT_OPERAND);
-    addr_type key_addr = get_operand_addr(_INPUT_OPERAND + 1);
-    addr_type value_addr = get_operand_addr(_INPUT_OPERAND + 2);
-    addr_type ouput_addr = get_operand_addr(_OUTPUT_OPERAND);
-    assert(num_heads <= _nkvh);
-    int kv_head_idx = head_idx / _nkvh;
-    addr_type sram_k_ofs = sram_key_base + kv_head_idx * (_dk * seq_len) * _config.precision;
-    addr_type sram_v_ofs = sram_value_base + kv_head_idx * (_dk * seq_len) * _config.precision;
-    std::set<addr_type> dram_kv_addrs;    // = _key[req_idx]->get_all_addrs();
-
-    for(int seq_idx = 0; seq_idx < seq_len; seq_idx++) {
-        for(int i = 0; i <_dk; i++) {
-            std::vector<uint32_t> idx = {(uint32_t)(kv_head_idx), (uint32_t)seq_idx, (uint32_t)i};
-            dram_kv_addrs.insert(make_address(idx, _key_shape));
-        }
-    }
-    std::vector<addr_type> key_addrs, value_addrs;
-    for(auto itr = dram_kv_addrs.begin(); itr != dram_kv_addrs.end(); itr++) {
-        key_addrs.push_back(key_addr + *itr);
-        value_addrs.push_back(value_addr + *itr);
-    }
-    tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-        .opcode = Opcode::MOVIN,
-        .dest_addr = sram_k_ofs,
-        .size = (uint32_t)value_addrs.size(),
-        .src_addrs = key_addrs,
-        .operand_id = _INPUT_OPERAND + 1,  // key
-    }));
-    tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-        .opcode = Opcode::MOVIN,
-        .dest_addr = sram_v_ofs,
-        .size = (uint32_t)value_addrs.size(),
-        .src_addrs = value_addrs,
-        .operand_id = _INPUT_OPERAND + 2,  // value
-    }));
-    for (int h_ofs = 0; h_ofs < num_heads; h_ofs++) {
-        int h_idx = head_idx + h_ofs;
-        addr_type sram_q_ofs = sram_query_base + h_ofs * (q_len * _dk) * _config.precision;
-        addr_type sram_l_ofs = sram_logit_base + h_ofs * (q_len * seq_len) * _config.precision;
-        std::set<addr_type> dram_query_addrs;  // = _query[req_idx]->get_all_addrs();
-        std::set<addr_type> dram_output_addrs;
-        for (int i = 0; i < _dk; i++) {
-            for (int seq_idx = 0; seq_idx < q_len; seq_idx++) {
-                // key:  h, d_k, seq_len
-                std::vector<uint32_t> query_idx = {(uint32_t)(h_idx), (uint32_t)seq_idx, (uint32_t)i};
-                std::vector<uint32_t> output_idx = {(uint32_t)(h_idx), (uint32_t)seq_idx, (uint32_t)i};
-                dram_query_addrs.insert(query_addr + make_address(query_idx, _query_shape));
-                dram_output_addrs.insert(ouput_addr + make_address(output_idx, _query_shape)); // Used query_shape intentionally
+        for (uint32_t N = 0; N < mapping.tile_out_loop.N; N++) {
+            const int heads_per_kv = _nh / _nkvh;
+            const int qlen_tiles_per_kv =
+                mapping.tile_out_loop.N / _nkvh;
+            const int head_off = N / qlen_tiles_per_kv * heads_per_kv;
+            for (uint32_t M = 0; M < mapping.tile_out_loop.M; M++) {
+                if (M == 0) {
+                    core_id = (core_id + 1) % _config.num_cores;
+                }
+                std::unique_ptr<Tile> tile = std::make_unique<Tile>(Tile{
+                    .status = Tile::Status::INITIALIZED,
+                    .optype = get_name(),
+                    .layer_id = _id,
+                    .fused_op_id = fused_op_id++,
+                    .batch = N,
+                    .Q = 1,
+                    .P = 1,
+                    .M = M,
+                    .C = 1,
+                    .S = 1,
+                    .R = 1,
+                    .accum = M != 0,
+                    .core_id = core_id,
+                });
+                _tiles.push_back(std::move(tile));
+                initialize_instructions(_tiles.back().get(), mapping, head_off,
+                                        heads_per_kv, req_idx);
             }
         }
-        // -- load --
-        // MOVIN query, key, value
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-            .opcode = Opcode::MOVIN,
-            .dest_addr = sram_q_ofs,
-            .size = (uint32_t)dram_query_addrs.size(),
-            .src_addrs = std::vector<addr_type>(dram_query_addrs.begin(), dram_query_addrs.end()),
-            .operand_id = _INPUT_OPERAND,  // query
-        }));
-        // -- compute --
-        // GEMM (q*k -> l)
-        const uint64_t query_key_block_id = intern_sa_weight_block(
-            key_addrs, seq_len, _dk);
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-            .opcode = Opcode::GEMM,
-            .dest_addr = sram_l_ofs,
-            .size = q_len * seq_len * _config.precision / _config.dram_req_size,
-            .compute_size =  ceil_div(q_len, _config.core_config[target_core].core_height) * seq_len,
-            .src_addrs = std::vector<addr_type>{sram_q_ofs, sram_k_ofs},
-
-            .tile_m = seq_len,
-            .tile_k = _dk,
-            .tile_n = q_len,
-            .sa_weight_block_id = query_key_block_id,
-            .sa_weight_block_known = query_key_block_id != 0,
-            .sa_analytical_preload_boundary = true,
-        }));
-        // Softmax (l -> l)
-
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-            .opcode = Opcode::SOFTMAX,
-            .dest_addr = sram_l_ofs,
-            .size = q_len * seq_len * _config.precision / _config.dram_req_size,
-            .compute_size = seq_len * _config.precision,
-            .src_addrs = std::vector<addr_type>{sram_l_ofs},
-            .tile_m = q_len,
-            .src_from_accum = true,
-        }));
-
-        // [ ] change output offset
-        // GEMM (l*v -> acc)
-        const uint64_t logits_value_block_id = intern_sa_weight_block(
-            value_addrs, _dk, seq_len);
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-            .opcode = Opcode::GEMM,
-            .dest_addr = sram_l_ofs,
-            .size = q_len * _dk * _config.precision / _config.dram_req_size,
-            .compute_size = q_len * _dk,
-            .src_addrs = std::vector<addr_type>{sram_l_ofs, sram_v_ofs},
-
-            .tile_m = _dk,
-            .tile_k = seq_len,
-            .tile_n = q_len,
-            .src_from_accum = true,
-            .sa_weight_block_id = logits_value_block_id,
-            .sa_weight_block_known = logits_value_block_id != 0,
-            .sa_analytical_preload_boundary = true,
-        }));
-
-        // MOVOUT
-        tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
-            .opcode = Opcode::MOVOUT,
-            .dest_addr = sram_l_ofs,
-            .size = (uint32_t)dram_output_addrs.size(),
-            .src_addrs = std::vector<addr_type>(dram_output_addrs.begin(), dram_output_addrs.end()),
-            .operand_id = _OUTPUT_OPERAND,
-        }));
     }
 }
 
-void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_idx, int num_heads) {
+void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_idx,
+                                        int num_heads, int request_idx) {
     // head_idx # start idx
     // num_heads
     int qlen_offset = mapping.tile_out_loop.N / _nkvh;
@@ -359,13 +251,31 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
     addr_type sram_key_base = sram_query_base + q_len * _dk * num_heads * _config.precision;
     addr_type sram_value_base = sram_key_base + _dk * seq_len * value_offset * _config.precision;
     addr_type sram_logit_base = ACCUM_SPAD_BASE;  // for logits
-    std::vector<uint32_t> output_shape = {_seq, _nh, _dk};
-    addr_type query_addr = get_operand_addr(_INPUT_OPERAND);
-    addr_type key_addr = get_operand_addr(_INPUT_OPERAND + 1);
-    addr_type value_addr = get_operand_addr(_INPUT_OPERAND + 2);
+    std::vector<uint32_t> output_shape = {_q_len, _nh, _dk};
+    const uint32_t query_operand =
+        onnx ? _query_projection_id : _INPUT_OPERAND;
+    const uint32_t key_operand =
+        onnx ? _key_projection_id : _INPUT_OPERAND + 1;
+    const uint32_t value_operand =
+        onnx ? _value_projection_id : _INPUT_OPERAND + 2;
+    addr_type query_addr = get_operand_addr(query_operand);
+    addr_type key_addr = get_operand_addr(key_operand);
+    addr_type value_addr = get_operand_addr(value_operand);
     addr_type ouput_addr = get_operand_addr(_OUTPUT_OPERAND);
+    if (onnx) {
+        query_addr += static_cast<addr_type>(request_idx) * _nh * _q_len *
+                      _dk * _config.precision;
+        key_addr += static_cast<addr_type>(request_idx) * _nkvh * _seq *
+                    _dk * _config.precision;
+        value_addr += static_cast<addr_type>(request_idx) * _nkvh * _seq *
+                      _dk * _config.precision;
+        ouput_addr += static_cast<addr_type>(request_idx) * _q_len * _dmodel *
+                      _config.precision;
+    }
     addr_type logits_addr = get_operand_addr(_OUTPUT_OPERAND) + _dmodel * _q_len * _config.precision; // logits addr for scale
-    assert(num_heads <= _nkvh);
+    assert(_nkvh > 0);
+    assert(num_heads > 0);
+    assert(head_idx >= 0 && head_idx + num_heads <= static_cast<int>(_nh));
     const int heads_per_kv = _nh / _nkvh;
     int kv_head_idx = head_idx / heads_per_kv;
     addr_type sram_k_ofs = sram_key_base + kv_head_idx * (_dk * seq_len) * _config.precision;
@@ -393,7 +303,7 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
         .dest_addr = sram_k_ofs,
         .size = (uint32_t)value_addrs.size(),
         .src_addrs = key_addrs,
-        .operand_id = _INPUT_OPERAND + 1,  // key
+        .operand_id = key_operand,
     }));
 
     for (int h_ofs = 0; h_ofs < num_heads; h_ofs++) {
@@ -418,7 +328,7 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
             .dest_addr = sram_q_ofs,
             .size = (uint32_t)dram_query_addrs.size(),
             .src_addrs = std::vector<addr_type>(dram_query_addrs.begin(), dram_query_addrs.end()),
-            .operand_id = _INPUT_OPERAND,  // query
+            .operand_id = query_operand,
         }));
     }
     tile->instructions.push_back(std::make_unique<Instruction>(Instruction{
@@ -426,7 +336,7 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
         .dest_addr = sram_v_ofs,
         .size = (uint32_t)value_addrs.size(),
         .src_addrs = value_addrs,
-        .operand_id = _INPUT_OPERAND + 2,  // value
+        .operand_id = value_operand,
     }));
 
     const std::set<addr_type> loaded_key_addrs(key_addrs.begin(), key_addrs.end());
@@ -479,8 +389,10 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
     // GEMM (q*k -> l)
     for(int sitr = 0; sitr < seq_len; sitr+=_config.core_config[target_core].core_height) {
         int s_loop = std::min(seq_len - sitr, _config.core_config[target_core].core_height);
-        for(int kitr = 0; kitr < _dk; kitr+=_config.core_config[target_core].core_height) {
-            int k_loop = std::min(_dk - kitr, _config.core_config[target_core].core_height);
+        for(int kitr = 0; kitr < _dk;
+            kitr += _config.core_config[target_core].core_width) {
+            int k_loop = std::min(
+                _dk - kitr, _config.core_config[target_core].core_width);
             uint64_t block_id = weight_block_id(
                 loaded_key_addrs, key_addr, tile->M * seq_len + sitr,
                 s_loop, kitr, k_loop, static_cast<uint32_t>(s_loop),
@@ -581,8 +493,11 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
     
     for(int kitr = 0; kitr < _dk; kitr+=_config.core_config[target_core].core_height) {
         int k_loop = std::min(_dk - kitr, _config.core_config[target_core].core_height);
-        for(int sitr = 0; sitr < seq_len; sitr+=_config.core_config[target_core].core_height) {
-            int s_loop = std::min(seq_len - sitr, _config.core_config[target_core].core_height);
+        for(int sitr = 0; sitr < seq_len;
+            sitr += _config.core_config[target_core].core_width) {
+            int s_loop = std::min(
+                seq_len - sitr,
+                _config.core_config[target_core].core_width);
             uint64_t block_id = weight_block_id(
                 loaded_value_addrs, value_addr, tile->M * seq_len + sitr,
                 s_loop, kitr, k_loop, static_cast<uint32_t>(k_loop),
@@ -615,7 +530,7 @@ void Attention::initialize_instructions(Tile* tile, Mapping mapping, int head_id
             std::set<addr_type> dram_output_addrs;
             for (int seq_idx = 0; seq_idx < q_len; seq_idx++) {
                 for (int i = 0; i < _dk; i++) {
-                    int q_index = tile->M * q_len + seq_idx;
+                    const int q_index = q_ffset * q_len + seq_idx;
                     if(q_index >= _q_len) break;
                     std::vector<uint32_t> output_idx = {(uint32_t)q_index, (uint32_t)(h_idx), (uint32_t)i};
                     dram_output_addrs.insert(ouput_addr + make_address(output_idx, output_shape)); // Used query_shape intentionally

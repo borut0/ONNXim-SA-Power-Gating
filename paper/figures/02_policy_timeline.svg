@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1380" height="860" viewBox="0 0 1380 860" role="img" aria-labelledby="title desc">
+  <title id="title">Conceptual power-state timeline for always-on, ReGate-style, and GreenSA policies</title>
+  <desc id="desc">Preload rows are written before a diagonal activation wave. GreenSA turns PE logic off outside the wave and places a live weight bank in deep sleep until reuse, while ReGate-style weight storage remains on after loading.</desc>
+  <defs>
+    <style>
+      .title{font:700 31px Arial,sans-serif;fill:#17253a}.sub{font:18px Arial,sans-serif;fill:#526278}
+      .head{font:700 20px Arial,sans-serif;fill:#17253a}.body{font:17px Arial,sans-serif;fill:#17253a}
+      .small{font:15px Arial,sans-serif;fill:#46586d}.phase{font:700 17px Arial,sans-serif;fill:#283d56}
+      .row{font:700 18px Arial,sans-serif;fill:#21354e}.grid{stroke:#d9e2ec;stroke-width:1.5}
+      .barlabel{font:700 16px Arial,sans-serif;fill:#17253a}.on{fill:#93b7e8}.off{fill:#e4e8ec}
+      .wake{fill:#a8d9b2}.ds{fill:#f3cf80}.preload{fill:#e7ad77}.baseline{fill:#bac9d9}
+    </style>
+  </defs>
+  <rect width="1380" height="860" fill="#fbfcfe"/>
+  <text x="55" y="56" class="title">Power-state timeline around one preload and wave</text>
+  <text x="55" y="86" class="sub">Illustrative ordering; widths are not proportional to cycle counts</text>
+
+  <text x="50" y="145" class="phase">Phase</text>
+  <rect x="276" y="112" width="175" height="55" rx="7" fill="#eef2f7"/>
+  <rect x="455" y="112" width="200" height="55" rx="7" fill="#fff0e5"/>
+  <rect x="659" y="112" width="184" height="55" rx="7" fill="#eef2f7"/>
+  <rect x="847" y="112" width="230" height="55" rx="7" fill="#e9f2ff"/>
+  <rect x="1081" y="112" width="230" height="55" rx="7" fill="#eef2f7"/>
+  <text x="335" y="146" class="phase">Idle</text>
+  <text x="490" y="146" class="phase">GEMM_PRELOAD</text>
+  <text x="708" y="146" class="phase">Wait / ready</text>
+  <text x="896" y="146" class="phase">Activation wave</text>
+  <text x="1137" y="146" class="phase">After wave</text>
+  <path d="M451 174V690M655 174V690M843 174V690M1077 174V690" class="grid" stroke-dasharray="5 5"/>
+  <path d="M276 174H1311" stroke="#455b72" stroke-width="2"/>
+
+  <text x="52" y="230" class="row">Always-on</text>
+  <text x="52" y="257" class="small">PE logic</text>
+  <rect x="276" y="226" width="1035" height="39" rx="5" class="on"/>
+  <text x="755" y="252" class="barlabel">ON throughout</text>
+  <text x="52" y="298" class="small">Selected weights</text>
+  <rect x="276" y="279" width="1035" height="39" rx="5" class="baseline"/>
+  <text x="680" y="305" class="barlabel">Powered throughout</text>
+
+  <text x="52" y="378" class="row">ReGate-style</text>
+  <text x="52" y="405" class="small">PE logic</text>
+  <rect x="276" y="383" width="567" height="39" rx="5" class="off"/>
+  <rect x="843" y="383" width="18" height="39" class="wake"/>
+  <rect x="861" y="383" width="216" height="39" class="on"/>
+  <rect x="1077" y="383" width="234" height="39" rx="5" class="off"/>
+  <text x="961" y="409" class="barlabel">ON</text>
+  <text x="52" y="450" class="small">Loaded weights</text>
+  <rect x="276" y="431" width="179" height="39" rx="5" class="off"/>
+  <rect x="455" y="431" width="200" height="39" class="preload"/>
+  <rect x="655" y="431" width="656" height="39" rx="5" class="on"/>
+  <text x="498" y="457" class="barlabel">row writes</text>
+  <text x="912" y="457" class="barlabel">ON / retained powered</text>
+
+  <text x="52" y="532" class="row">GreenSA</text>
+  <text x="52" y="559" class="small">PE logic</text>
+  <rect x="276" y="537" width="567" height="39" rx="5" class="off"/>
+  <rect x="843" y="537" width="18" height="39" class="wake"/>
+  <rect x="861" y="537" width="216" height="39" class="on"/>
+  <rect x="1077" y="537" width="234" height="39" rx="5" class="off"/>
+  <text x="961" y="563" class="barlabel">ON</text>
+  <text x="52" y="601" class="small">Selected bank: live</text>
+  <rect x="276" y="584" width="179" height="39" rx="5" class="off"/>
+  <rect x="455" y="584" width="200" height="39" class="preload"/>
+  <rect x="655" y="584" width="188" height="39" class="ds"/>
+  <rect x="843" y="584" width="234" height="39" class="on"/>
+  <rect x="1077" y="584" width="234" height="39" rx="5" class="ds"/>
+  <text x="713" y="610" class="barlabel">DS</text>
+  <text x="967" y="610" class="barlabel">ON</text>
+  <text x="1162" y="610" class="barlabel">DS</text>
+  <text x="52" y="650" class="small">Unneeded bank</text>
+  <rect x="276" y="634" width="1035" height="39" rx="5" class="off"/>
+  <text x="680" y="660" class="barlabel">OFF in this example; another live bank may use DS</text>
+
+  <rect x="55" y="718" width="1260" height="105" rx="12" fill="#f1f5f9" stroke="#d5dfeb"/>
+  <text x="77" y="747" class="body">GreenSA separated waves: one leading PE wake cycle; the modeled OFF interval is at least 48 cycles.</text>
+  <text x="77" y="776" class="body">A live bank uses DS between consumers. A dead bank uses OFF; its old value cannot be read after OFF.</text>
+  <text x="77" y="805" class="small">Bank DS wake is assumed hidden by PE wake. Row widths, wave placement, and bank identity depend on each instruction.</text>
+</svg>

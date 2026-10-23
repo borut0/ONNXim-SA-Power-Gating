@@ -47,7 +47,8 @@ Core::Core(uint32_t id, SimulationConfig config)
       environment_enabled("ONNXSIM_SA_HYBRID_CONFIG") ||
       environment_enabled("ONNXSIM_SA_UPDATED_PREDICTOR") ||
       environment_enabled("ONNXSIM_REGATE_UPDATED_PROFILE") ||
-      environment_enabled("ONNXSIM_REGATE_EVENT_DRIVEN_PROFILE");
+      environment_enabled("ONNXSIM_REGATE_EVENT_DRIVEN_PROFILE") ||
+      environment_enabled("ONNXSIM_SHARED_SA_POLICY");
   _waiting_write_reqs = 0;
   _running_layer = -1;
 }

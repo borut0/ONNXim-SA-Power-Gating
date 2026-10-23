@@ -198,34 +198,119 @@ TEST(AttentionSaMetadataTest,
   EXPECT_EQ(partial_logits_value[3]->sa_weight_block_id, 0U);
 }
 
-TEST(AttentionSaMetadataTest, DirectOnnxStylePathKeepsNativeGemmTiming) {
+TEST(AttentionSaMetadataTest,
+     FusedOnnxPathUsesPhysicalSaSizedPreloadGenerations) {
   CoreConfig core_config{};
   core_config.core_type = CoreType::SYSTOLIC_WS;
-  core_config.core_height = 2;
+  core_config.core_height = 4;
+  core_config.core_width = 2;
+  core_config.spad_size = 64;
+  core_config.accum_spad_size = 16;
+  SimulationConfig config{};
+  config.num_cores = 1;
+  config.core_config = &core_config;
+  config.precision = 1;
+  config.full_precision = 4;
+  config.dram_req_size = 4;
+  config.layout = "NHWC";
+  Model model(json::object(), config, "attention_preload_first_test");
+
+  std::vector<uint32_t> input_dims{1, 5, 4};
+  std::vector<uint32_t> weight_dims{4, 12};
+  std::vector<uint32_t> bias_dims{12};
+  model.add_tensor(std::make_unique<Tensor>(
+      0, "input", input_dims, config.precision, true));
+  model.add_tensor(std::make_unique<Tensor>(
+      0, "weight", weight_dims, config.precision, true));
+  model.add_tensor(std::make_unique<Tensor>(
+      0, "bias", bias_dims, config.precision, true));
+
+  onnx::NodeProto node;
+  node.set_name("fused_attention");
+  node.set_op_type("Attention");
+  node.add_input("input");
+  node.add_input("weight");
+  node.add_input("bias");
+  node.add_output("output");
+  auto* num_heads = node.add_attribute();
+  num_heads->set_name("num_heads");
+  num_heads->set_i(2);
+
+  Attention attention(config, &model, node, 0);
+  MappingTable mapping_table(config);
+  attention.initialize_onnx_tiles(mapping_table);
+
+  auto& tiles = attention.get_tiles();
+  ASSERT_FALSE(tiles.empty());
+  size_t sa_instruction_count = 0;
+  std::set<uint64_t> qk_generations;
+  std::set<uint64_t> pv_generations;
+  for (const auto& tile : tiles) {
+    ASSERT_NE(tile, nullptr);
+    ASSERT_TRUE(tile->sa_metadata_finalized);
+    ASSERT_FALSE(tile->sa_descriptors.empty());
+    EXPECT_EQ(tile->sa_descriptors.front().opcode, Opcode::GEMM_PRELOAD);
+    for (const auto& descriptor : tile->sa_descriptors) {
+      ++sa_instruction_count;
+      ASSERT_NE(descriptor.instruction, nullptr);
+      EXPECT_EQ(descriptor.opcode, Opcode::GEMM_PRELOAD);
+      EXPECT_FALSE(descriptor.analytical_preload_boundary);
+      EXPECT_GT(descriptor.preload_sequence, 0U);
+      EXPECT_GT(descriptor.instruction->tile_m, 0U);
+      EXPECT_LE(descriptor.instruction->tile_m, core_config.core_height);
+      EXPECT_GT(descriptor.instruction->tile_k, 0U);
+      EXPECT_LE(descriptor.instruction->tile_k, core_config.core_width);
+      EXPECT_GT(descriptor.instruction->tile_n, 0U);
+      EXPECT_TRUE(descriptor.weight_block_known);
+      EXPECT_NE(descriptor.weight_block_id, 0U);
+      (descriptor.instruction->src_from_accum ? pv_generations
+                                               : qk_generations)
+          .insert(descriptor.weight_block_id);
+    }
+  }
+  EXPECT_GT(sa_instruction_count, 0U);
+  EXPECT_GT(qk_generations.size(), 1U);
+  EXPECT_GT(pv_generations.size(), 1U);
+  for (uint64_t qk_generation : qk_generations) {
+    EXPECT_EQ(pv_generations.count(qk_generation), 0U);
+  }
+
+  delete attention._projection_node;
+  attention._projection_node = nullptr;
+}
+
+TEST(AttentionSaMetadataTest,
+     MappedPathMovoutUsesQueryTileOffsetAndCoversEveryQuery) {
+  CoreConfig core_config{};
+  core_config.core_type = CoreType::SYSTOLIC_WS;
+  core_config.core_height = 4;
   core_config.core_width = 2;
   SimulationConfig config{};
   config.num_cores = 1;
   config.core_config = &core_config;
   config.precision = 1;
-  config.dram_req_size = 4;
+  config.full_precision = 4;
+  config.dram_req_size = 1;
   config.layout = "NHWC";
-  Model model(json::object(), config, "attention_preload_first_test");
+
+  Model model(json::object(), config, "attention_movout_offset_test");
   std::map<std::string, std::string> attributes = {
-      {"num_tokens", "2"}, {"num_heads", "2"},
-      {"num_kv_heads", "2"}, {"hidden_size", "4"}};
+      {"num_tokens", "4"}, {"num_heads", "4"},
+      {"num_kv_heads", "2"}, {"hidden_size", "16"}};
   Attention attention(config, &model, "attention", attributes, 0);
-  std::vector<uint32_t> query_dims{2, 2, 2};
-  std::vector<uint32_t> key_dims{2, 2, 2};
-  std::vector<uint32_t> value_dims{2, 2, 2};
-  std::vector<uint32_t> output_dims{2, 4};
+
+  std::vector<uint32_t> query_shape{4, 4, 4};
+  std::vector<uint32_t> key_shape{2, 4, 4};
+  std::vector<uint32_t> value_shape{2, 4, 4};
+  std::vector<uint32_t> output_shape{4, 16};
   auto query = std::make_unique<Tensor>(
-      0, "query", query_dims, 1, true);
+      0, "query", query_shape, config.precision, true);
   auto key = std::make_unique<Tensor>(
-      0, "key", key_dims, 1, true);
+      0, "key", key_shape, config.precision, true);
   auto value = std::make_unique<Tensor>(
-      0, "value", value_dims, 1, true);
+      0, "value", value_shape, config.precision, true);
   auto output = std::make_unique<Tensor>(
-      0, "output", output_dims, 1, false);
+      0, "output", output_shape, config.precision, false);
   const uint32_t query_id = query->get_id();
   const uint32_t key_id = key->get_id();
   const uint32_t value_id = value->get_id();
@@ -238,21 +323,40 @@ TEST(AttentionSaMetadataTest, DirectOnnxStylePathKeepsNativeGemmTiming) {
   attention.add_input(key_id);
   attention.add_input(value_id);
   attention.add_output(output_id);
-  attention._seq = 2;
-  attention._query_shape = {2, 2, 2};
-  attention._key_shape = {2, 2, 2};
-  attention._value_shape = {2, 2, 2};
+  attention._seq = 4;
+  attention._query_shape = query_shape;
+  attention._key_shape = key_shape;
+  attention._value_shape = value_shape;
 
-  Tile tile{};
-  attention.initialize_instructions(&tile, 0, 1);
-  tile.finalize_sa_metadata();
-  ASSERT_FALSE(tile.sa_descriptors.empty());
-  EXPECT_EQ(tile.sa_descriptors.front().opcode, Opcode::GEMM);
-  for (const auto& descriptor : tile.sa_descriptors) {
-    EXPECT_EQ(descriptor.opcode, Opcode::GEMM);
-    EXPECT_TRUE(descriptor.analytical_preload_boundary);
-    EXPECT_GT(descriptor.preload_sequence, 0U);
+  Mapping mapping{};
+  mapping.tile_in_loop.N = 4;   // two queries for each of two heads
+  mapping.tile_in_loop.M = 4;
+  mapping.tile_out_loop.N = 4;  // two query tiles for each of two KV heads
+  mapping.tile_out_loop.M = 1;
+
+  std::set<addr_type> all_output_addresses;
+  std::set<addr_type> prior_tile_addresses;
+  for (uint32_t query_tile = 0; query_tile < 2; ++query_tile) {
+    Tile tile{};
+    tile.batch = query_tile;
+    tile.M = 0;
+    attention.initialize_instructions(&tile, mapping, 0, 2);
+
+    std::set<addr_type> tile_output_addresses;
+    for (const auto& instruction : tile.instructions) {
+      if (instruction->opcode != Opcode::MOVOUT) continue;
+      tile_output_addresses.insert(instruction->src_addrs.begin(),
+                                   instruction->src_addrs.end());
+    }
+    ASSERT_EQ(tile_output_addresses.size(), 16U);
+    for (addr_type address : tile_output_addresses) {
+      EXPECT_EQ(prior_tile_addresses.count(address), 0U);
+      all_output_addresses.insert(address);
+    }
+    prior_tile_addresses.insert(tile_output_addresses.begin(),
+                                tile_output_addresses.end());
   }
+  EXPECT_EQ(all_output_addresses.size(), 32U);
 }
 
 TEST(AttentionSaMetadataTest, NonFusedSpliceTransfersLiveTilesOnly) {

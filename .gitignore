@@ -1,6 +1,9 @@
 models/*
 model_lists/*
 build/*
+.tools/
+resume/
+power_model/final_experiments/
 
 # Local editor and Python cache files.
 .vscode/

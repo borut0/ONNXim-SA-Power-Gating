@@ -24,6 +24,48 @@ class SystolicWS : public Core {
   uint32_t _stat_systolic_preload_issue_count = 0;
   cycle_type get_vector_compute_cycles(std::unique_ptr<Instruction>& inst);
 
+  // Optional functional SA timing. All policies use the same two-bank
+  // preload/diagonal-wave scheduler; only policy wake time differs.
+  enum class SharedSaPolicy { DISABLED, ALWAYS_ON, REGATE, OURS };
+  using SharedGeneration = std::pair<uint64_t, uint64_t>;
+  struct SharedWeightBank {
+    bool occupied = false;
+    SharedGeneration generation{0, 0};
+    uint64_t weight_block_id = 0;
+    bool weight_block_known = false;
+    uint32_t mapped_rows = 0;
+    uint32_t mapped_columns = 0;
+    cycle_type available_cycle = 0;
+    cycle_type preload_start = 0;
+  };
+  SharedSaPolicy _shared_sa_policy = SharedSaPolicy::DISABLED;
+  std::array<SharedWeightBank, 2> _shared_weight_banks{};
+  std::map<SharedGeneration, uint64_t> _shared_remaining_consumers;
+  cycle_type _shared_preload_lane_ready = 0;
+  cycle_type _shared_wave_frontier = 0;
+  cycle_type _shared_first_pe_live_until = 0;
+  uint64_t _shared_sa_instructions = 0;
+  uint64_t _shared_preloads = 0;
+  uint64_t _shared_preload_cycles = 0;
+  uint64_t _shared_pe_wake_delay_cycles = 0;
+  uint64_t _shared_min_off_lockout_cycles = 0;
+  uint64_t _shared_min_off_lockout_events = 0;
+  uint64_t _shared_bank_wait_cycles = 0;
+  std::optional<cycle_type> _shared_last_bank_block_cycle;
+  uint64_t _shared_sa_completion_cycles = 0;
+  uint64_t _shared_fifo_commit_delay_cycles = 0;
+  std::vector<json> _shared_sa_events;
+  void initialize_shared_sa_timing();
+  void schedule_shared_sa_instruction(Instruction& inst);
+  bool shared_preload_bank_available() const;
+  void emit_shared_sa_timing() const;
+
+  // ReGate reports a 47-cycle PE break-even time.  Our policy deliberately
+  // commits a non-contiguous PE(0,0) wave gap for one cycle beyond that
+  // threshold.  The single wake/guard cycle is included in this interval.
+  static constexpr cycle_type kSharedPeBreakEvenCycles = 47;
+  static constexpr cycle_type kSharedOursMinimumOffInterval = 48;
+
   // for analysis
   enum class ComputeBlockReason {
     NONE,

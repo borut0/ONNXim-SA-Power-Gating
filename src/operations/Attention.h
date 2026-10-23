@@ -53,8 +53,8 @@ class Attention : public Operation {
     void initialize_tiles(MappingTable& mapping_table) override;
     void initialize_onnx_tiles(MappingTable& mapping_table);
     void initialize_non_fused_tiles(MappingTable& mapping_table);
-    void initialize_instructions(Tile* tile, Mapping mapping, int head_idx, int num_heads);
-    void initialize_instructions(Tile* tile, int head_idx, int num_heads);
+    void initialize_instructions(Tile* tile, Mapping mapping, int head_idx,
+                                 int num_heads, int request_idx = 0);
 
     void initialize_scale_instructions(Tile* tile, Mapping mapping, int head_idx, int num_tiles, int query_idx, int num_queries);
    protected:

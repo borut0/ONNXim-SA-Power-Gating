@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="760" viewBox="0 0 1300 760" role="img" aria-labelledby="title desc">
+  <title id="title">GreenSA evaluation flow in ONNXim</title>
+  <desc id="desc">A workload and one fixed architecture configuration feed ONNXim mapping. Four independent runs produce idleness, always-on, ReGate-style, and GreenSA records. Validation checks matched SA work and state accounting before reporting energy and performance.</desc>
+  <defs>
+    <style>
+      .title{font:700 31px Arial,sans-serif;fill:#17253a}.sub{font:18px Arial,sans-serif;fill:#526278}
+      .head{font:700 20px Arial,sans-serif;fill:#17253a}.body{font:17px Arial,sans-serif;fill:#34475e}
+      .small{font:15px Arial,sans-serif;fill:#526278}.input{fill:#eff2f7;stroke:#687f99;stroke-width:2.5}
+      .map{fill:#e8f0ff;stroke:#4d79b7;stroke-width:2.5}.run{fill:#eaf5ee;stroke:#5a9b72;stroke-width:2.5}
+      .check{fill:#fff2d8;stroke:#d3a34d;stroke-width:2.5}.output{fill:#f0eafa;stroke:#8b6dbb;stroke-width:2.5}
+      .wire{fill:none;stroke:#405773;stroke-width:3;marker-end:url(#arrow)}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#405773"/></marker>
+  </defs>
+  <rect width="1300" height="760" fill="#fbfcfe"/>
+  <text x="56" y="57" class="title">Evaluation flow for each workload</text>
+  <text x="56" y="87" class="sub">One architecture and identical workload arguments are used in all four runs</text>
+
+  <rect x="93" y="132" width="430" height="95" rx="13" class="input"/>
+  <text x="160" y="171" class="head">ONNX model or LLM configuration</text>
+  <text x="183" y="200" class="body">model list · input trace · batch</text>
+  <rect x="777" y="132" width="430" height="95" rx="13" class="input"/>
+  <text x="850" y="171" class="head">Fixed ONNXim architecture</text>
+  <text x="817" y="200" class="body">4 cores · 128×128 SA · BookSim2 · HBM2</text>
+
+  <path d="M308 227V266H607" class="wire"/>
+  <path d="M992 227V266H693" class="wire"/>
+  <rect x="465" y="265" width="370" height="84" rx="13" class="map"/>
+  <text x="560" y="299" class="head">Mapping and tiling</text>
+  <text x="494" y="328" class="body">SA instructions · footprints · preloads</text>
+  <path d="M650 349V392" class="wire"/>
+
+  <path d="M161 391H1139" stroke="#405773" stroke-width="3"/>
+  <path d="M161 391V419M487 391V419M813 391V419M1139 391V419" class="wire"/>
+  <rect x="64" y="421" width="245" height="116" rx="13" class="run"/>
+  <text x="118" y="456" class="head">Idleness run</text>
+  <text x="93" y="486" class="body">whole-SA intervals</text>
+  <text x="90" y="515" class="body">PE footprint / waves</text>
+  <rect x="390" y="421" width="245" height="116" rx="13" class="run"/>
+  <text x="446" y="456" class="head">Always-on</text>
+  <text x="419" y="486" class="body">reference cycles</text>
+  <text x="415" y="515" class="body">reference SA work</text>
+  <rect x="716" y="421" width="245" height="116" rx="13" class="run"/>
+  <text x="773" y="456" class="head">ReGate-style</text>
+  <text x="750" y="486" class="body">wave gating</text>
+  <text x="746" y="515" class="body">loaded weights ON</text>
+  <rect x="1042" y="421" width="245" height="116" rx="13" class="run"/>
+  <text x="1127" y="456" class="head">GreenSA</text>
+  <text x="1070" y="486" class="body">wave gating · 2 banks</text>
+  <text x="1085" y="515" class="body">ON / DS / OFF</text>
+
+  <path d="M185 537V570H648M511 537V570H648M837 537V570H648M1165 537V570H648" class="wire"/>
+  <rect x="383" y="571" width="535" height="72" rx="12" class="check"/>
+  <text x="455" y="601" class="head">Validate before comparing</text>
+  <text x="416" y="629" class="body">4 cores · matched SA work · state partitions · idle records</text>
+  <path d="M650 643V669" class="wire"/>
+  <rect x="180" y="671" width="940" height="64" rx="12" class="output"/>
+  <text x="342" y="711" class="head">SA / PE idleness · modeled static saving · estimated penalty · β sensitivity</text>
+</svg>

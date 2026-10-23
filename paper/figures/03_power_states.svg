@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1300" height="780" viewBox="0 0 1300 780" role="img" aria-labelledby="title desc">
+  <title id="title">GreenSA PE-logic and weight-bank power states</title>
+  <desc id="desc">PE logic has ON and OFF states. Each of two independent weight banks has ON, deep sleep, and OFF states. A live weight uses deep sleep between reads, while dead or overwritten weights may be turned off.</desc>
+  <defs>
+    <style>
+      .title{font:700 31px Arial,sans-serif;fill:#17253a}.sub{font:18px Arial,sans-serif;fill:#526278}
+      .head{font:700 22px Arial,sans-serif;fill:#17253a}.body{font:18px Arial,sans-serif;fill:#17253a}
+      .small{font:16px Arial,sans-serif;fill:#526278}.node{stroke-width:3}
+      .off{fill:#eef1f4;stroke:#83909e}.on{fill:#e6effc;stroke:#4c77b2}
+      .ds{fill:#fff0c9;stroke:#cf9b36}.arrow{fill:none;stroke:#425772;stroke-width:3;marker-end:url(#arrow)}
+      .note{font:16px Arial,sans-serif;fill:#43546b}
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#425772"/></marker>
+  </defs>
+  <rect width="1300" height="780" fill="#fbfcfe"/>
+  <text x="54" y="57" class="title">GreenSA power-state model</text>
+  <text x="54" y="87" class="sub">PE compute logic and the two weight banks are controlled independently</text>
+
+  <rect x="52" y="119" width="526" height="508" rx="17" fill="#f5f8fc" stroke="#d4dfeb" stroke-width="2"/>
+  <text x="76" y="158" class="head">PE logic: one state machine per PE</text>
+  <rect x="98" y="244" width="169" height="90" rx="16" class="node off"/>
+  <text x="158" y="282" class="head">OFF</text>
+  <text x="117" y="310" class="small">3% leakage model</text>
+  <rect x="365" y="244" width="169" height="90" rx="16" class="node on"/>
+  <text x="424" y="282" class="head">ON</text>
+  <text x="398" y="310" class="small">wave in PE</text>
+  <path d="M267 267H365" class="arrow"/>
+  <text x="278" y="249" class="small">wave arrives</text>
+  <path d="M365 315H267" class="arrow"/>
+  <text x="282" y="358" class="small">wave departs</text>
+  <rect x="83" y="407" width="463" height="155" rx="12" fill="#e9f2ff"/>
+  <text x="107" y="440" class="body">• 1 modeled leading PE wake cycle</text>
+  <text x="107" y="476" class="body">• ReGate: no minimum OFF lockout</text>
+  <text x="107" y="512" class="body">• GreenSA: separated-wave OFF interval</text>
+  <text x="127" y="540" class="body">  at least 48 cycles</text>
+
+  <rect x="604" y="119" width="644" height="508" rx="17" fill="#fffaf3" stroke="#ead9b6" stroke-width="2"/>
+  <text x="628" y="158" class="head">Each weight bank: separate state machine</text>
+  <rect x="653" y="245" width="155" height="91" rx="16" class="node off"/>
+  <text x="704" y="281" class="head">OFF</text>
+  <text x="676" y="311" class="small">value lost</text>
+  <rect x="871" y="245" width="155" height="91" rx="16" class="node ds"/>
+  <text x="930" y="281" class="head">DS</text>
+  <text x="895" y="311" class="small">value kept</text>
+  <rect x="1082" y="245" width="135" height="91" rx="16" class="node on"/>
+  <text x="1122" y="281" class="head">ON</text>
+  <text x="1096" y="311" class="small">write / read</text>
+
+  <path d="M730 245V199H1149V245" class="arrow"/>
+  <text x="826" y="190" class="small">new preload writes value</text>
+  <path d="M1026 267H1082" class="arrow"/>
+  <text x="1035" y="242" class="small">reuse</text>
+  <path d="M1082 315H1026" class="arrow"/>
+  <text x="1038" y="356" class="small">keep live</text>
+  <path d="M1082 393H729V336" class="arrow"/>
+  <text x="806" y="386" class="small">last consumer; discard value</text>
+  <path d="M871 324H808" class="arrow"/>
+  <text x="805" y="356" class="small">no later read</text>
+  <rect x="628" y="439" width="592" height="124" rx="12" fill="#fff2d9"/>
+  <text x="651" y="472" class="body">Bank 0 and bank 1 may occupy different states.</text>
+  <text x="651" y="507" class="body">DS leakage ratio: 0.42 of ON (Slumber parameter).</text>
+  <text x="651" y="541" class="small">DS wake latency is assumed covered by the PE wake.</text>
+
+  <rect x="52" y="655" width="1196" height="86" rx="12" fill="#eef2f6"/>
+  <text x="75" y="688" class="body">An OFF bank needs a new preload before its value can be used. A DS bank preserves its loaded value for later GEMM reuse.</text>
+  <text x="75" y="717" class="small">These are architecture and energy-model states; this figure does not claim measured voltage-switch timing or a fabricated circuit.</text>
+</svg>

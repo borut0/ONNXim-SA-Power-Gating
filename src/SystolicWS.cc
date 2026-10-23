@@ -14,6 +14,13 @@
 
 namespace {
 
+cycle_type checked_sa_add(cycle_type lhs, cycle_type rhs) {
+  if (rhs > std::numeric_limits<cycle_type>::max() - lhs) {
+    throw std::overflow_error("shared SA timing cycle overflow");
+  }
+  return lhs + rhs;
+}
+
 const char* opcode_name(Opcode opcode) {
   switch (opcode) {
     case Opcode::MOVIN: return "MOVIN";
@@ -118,6 +125,7 @@ SystolicWS::SystolicWS(uint32_t id, SimulationConfig config)
       _scheduler_opportunity_measure || _scheduler_unlock_measure;
 
   initialize_hybrid_policy();
+  initialize_shared_sa_timing();
   initialize_sa_event_trace();
   initialize_regate_functional_profile();
   initialize_regate_two_bank_profile();
@@ -161,6 +169,7 @@ SystolicWS::SystolicWS(uint32_t id, SimulationConfig config)
 }
 
 SystolicWS::~SystolicWS() {
+  emit_shared_sa_timing();
   emit_regate_functional_profile();
   emit_regate_two_bank_profile();
   emit_updated_regate_profile();
@@ -186,9 +195,294 @@ SystolicWS::~SystolicWS() {
   }
 }
 
+void SystolicWS::initialize_shared_sa_timing() {
+  const char* requested = std::getenv("ONNXSIM_SHARED_SA_POLICY");
+  if (requested == nullptr || requested[0] == '\0') {
+    return;
+  }
+  const std::string policy(requested);
+  if (policy == "always_on") {
+    _shared_sa_policy = SharedSaPolicy::ALWAYS_ON;
+  } else if (policy == "regate") {
+    _shared_sa_policy = SharedSaPolicy::REGATE;
+  } else if (policy == "ours") {
+    _shared_sa_policy = SharedSaPolicy::OURS;
+  } else {
+    throw std::invalid_argument(
+        "ONNXSIM_SHARED_SA_POLICY must be always_on, regate, or ours");
+  }
+  if (_config.core_config[_id].core_height == 0 ||
+      _config.core_config[_id].core_width == 0) {
+    throw std::logic_error("shared SA timing requires nonzero array dimensions");
+  }
+  const auto enabled = [](const char* name) {
+    const char* value = std::getenv(name);
+    return value != nullptr && value[0] != '\0' &&
+           std::string(value) != "0";
+  };
+  if (_hybrid_parameters.enabled ||
+      enabled("ONNXSIM_SA_REGION_PROFILE") ||
+      enabled("ONNXSIM_REGATE_FUNCTIONAL_PROFILE") ||
+      enabled("ONNXSIM_REGATE_TWO_BANK_PROFILE") ||
+      enabled("ONNXSIM_REGATE_ROW_PRELOAD_PROFILE") ||
+      enabled("ONNXSIM_REGATE_EVENT_DRIVEN_PROFILE") ||
+      enabled("ONNXSIM_REGATE_UPDATED_PROFILE")) {
+    throw std::logic_error(
+        "shared SA timing cannot be combined with legacy SA timing profiles");
+  }
+}
+
+bool SystolicWS::shared_preload_bank_available() const {
+  for (const SharedWeightBank& bank : _shared_weight_banks) {
+    if (!bank.occupied ||
+        _shared_remaining_consumers.find(bank.generation) ==
+            _shared_remaining_consumers.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void SystolicWS::schedule_shared_sa_instruction(Instruction& inst) {
+  const cycle_type rows = inst.tile_m;
+  const cycle_type columns = inst.tile_k;
+  const cycle_type vectors = inst.tile_n;
+  if (rows == 0 || columns == 0 || vectors == 0 ||
+      rows > _config.core_config[_id].core_height ||
+      columns > _config.core_config[_id].core_width ||
+      inst.sa_preload_sequence == 0) {
+    throw std::logic_error("invalid shared SA instruction footprint or generation");
+  }
+  const SharedGeneration generation{
+      inst.measurement_tile_id, inst.sa_preload_sequence};
+  auto remaining = _shared_remaining_consumers.find(generation);
+  if (remaining == _shared_remaining_consumers.end() || remaining->second == 0) {
+    throw std::logic_error("shared SA instruction has no admitted generation");
+  }
+
+  size_t bank_index = _shared_weight_banks.size();
+  std::optional<cycle_type> row_write_start;
+  if (inst.opcode == Opcode::GEMM_PRELOAD) {
+    cycle_type best_start = std::numeric_limits<cycle_type>::max();
+    for (size_t i = 0; i < _shared_weight_banks.size(); ++i) {
+      const SharedWeightBank& bank = _shared_weight_banks[i];
+      if (bank.occupied &&
+          _shared_remaining_consumers.find(bank.generation) !=
+              _shared_remaining_consumers.end()) {
+        continue;
+      }
+      const cycle_type candidate =
+          std::max({_core_cycle, _shared_preload_lane_ready,
+                    bank.available_cycle});
+      if (candidate < best_start) {
+        best_start = candidate;
+        bank_index = i;
+      }
+    }
+    if (bank_index == _shared_weight_banks.size()) {
+      throw std::logic_error("no unpinned shared SA weight bank at preload issue");
+    }
+    SharedWeightBank& bank = _shared_weight_banks[bank_index];
+    const cycle_type earliest_without_bank =
+        std::max(_core_cycle, _shared_preload_lane_ready);
+    if (best_start > earliest_without_bank) {
+      _shared_bank_wait_cycles += best_start - earliest_without_bank;
+    }
+    row_write_start = best_start;
+    _shared_preload_lane_ready = checked_sa_add(best_start, rows);
+    _shared_preload_cycles += rows;
+    ++_shared_preloads;
+    bank.occupied = true;
+    bank.generation = generation;
+    bank.weight_block_id = inst.sa_weight_block_id;
+    bank.weight_block_known = inst.sa_weight_block_known;
+    bank.mapped_rows = inst.tile_m;
+    bank.mapped_columns = inst.tile_k;
+    bank.preload_start = best_start;
+  } else if (inst.opcode == Opcode::GEMM) {
+    for (size_t i = 0; i < _shared_weight_banks.size(); ++i) {
+      if (_shared_weight_banks[i].occupied &&
+          _shared_weight_banks[i].generation == generation) {
+        bank_index = i;
+        break;
+      }
+    }
+    if (bank_index == _shared_weight_banks.size()) {
+      throw std::logic_error("GEMM has no resident shared SA weight generation");
+    }
+    const SharedWeightBank& bank = _shared_weight_banks[bank_index];
+    if ((bank.weight_block_known && inst.sa_weight_block_known &&
+         bank.weight_block_id != inst.sa_weight_block_id) ||
+        bank.mapped_rows != inst.tile_m ||
+        bank.mapped_columns != inst.tile_k) {
+      throw std::logic_error("GEMM weight identity or footprint changed without preload");
+    }
+  } else {
+    throw std::logic_error("non-SA opcode passed to shared SA scheduler");
+  }
+
+  const SharedWeightBank& bank = _shared_weight_banks[bank_index];
+  cycle_type start =
+      std::max({_core_cycle, _shared_wave_frontier,
+                checked_sa_add(bank.preload_start, 1)});
+  const cycle_type start_before_power_policy = start;
+  const bool first_wave = _shared_sa_instructions == 0;
+  const bool noncontiguous_wave =
+      !first_wave && start > _shared_first_pe_live_until;
+
+  // Every first or separated wave needs an explicit leading PE(0,0) wake
+  // cycle, even when preload or resource waiting preceded that wave.
+  if (_shared_sa_policy != SharedSaPolicy::ALWAYS_ON &&
+      (first_wave || noncontiguous_wave)) {
+    start = checked_sa_add(start, 1);
+    ++_shared_pe_wake_delay_cycles;
+  }
+  // Our policy does not predict a future idle interval. After the wake cycle,
+  // extend a separated interval only as much as needed to reach 48 cycles.
+  // The wake is part of that interval, never an extra cycle after it.
+  if (_shared_sa_policy == SharedSaPolicy::OURS && noncontiguous_wave) {
+    const cycle_type unlock = checked_sa_add(
+        _shared_first_pe_live_until, kSharedOursMinimumOffInterval);
+    if (start < unlock) {
+      _shared_min_off_lockout_cycles += unlock - start;
+      ++_shared_min_off_lockout_events;
+      start = unlock;
+    }
+  }
+  const cycle_type natural_finish =
+      checked_sa_add(start, checked_sa_add(
+          checked_sa_add(rows, columns), vectors) - 2);
+  cycle_type committed_finish = natural_finish;
+  // Core retires only the pipeline front, at most once per cycle. Keep the
+  // dependency-visible completion order exactly consistent with that FIFO.
+  if (!_compute_pipeline.empty()) {
+    committed_finish = std::max(
+        committed_finish,
+        checked_sa_add(_compute_pipeline.back()->finish_cycle, 1));
+  }
+  _shared_fifo_commit_delay_cycles += committed_finish - natural_finish;
+  inst.start_cycle = start;
+  inst.finish_cycle = committed_finish;
+  _shared_wave_frontier = checked_sa_add(start, vectors);
+  _shared_first_pe_live_until = _shared_wave_frontier;
+  SharedWeightBank& written_bank = _shared_weight_banks[bank_index];
+  written_bank.available_cycle =
+      std::max(written_bank.available_cycle, natural_finish);
+  _shared_sa_completion_cycles += committed_finish - start;
+  ++_shared_sa_instructions;
+  _shared_sa_events.push_back(json{
+      {"tile_id", inst.measurement_tile_id},
+      {"preload_sequence", inst.sa_preload_sequence},
+      {"opcode", opcode_name(inst.opcode)},
+      {"bank", bank_index},
+      {"weight_block_id", inst.sa_weight_block_id},
+      {"weight_block_known", inst.sa_weight_block_known},
+      {"mapped_rows", rows},
+      {"mapped_columns", columns},
+      {"vectors", vectors},
+      {"issue_cycle", _core_cycle},
+      {"compute_start_before_power_policy", start_before_power_policy},
+      {"modeled_power_policy_delay", start - start_before_power_policy},
+      {"row_write_start", row_write_start.has_value()
+                              ? json(*row_write_start) : json(nullptr)},
+      {"compute_start", start},
+      {"natural_wave_finish", natural_finish},
+      {"compute_finish", committed_finish}});
+  if (--remaining->second == 0) {
+    _shared_remaining_consumers.erase(remaining);
+  }
+}
+
+void SystolicWS::emit_shared_sa_timing() const {
+  if (_shared_sa_policy == SharedSaPolicy::DISABLED) {
+    return;
+  }
+  const char* policy = _shared_sa_policy == SharedSaPolicy::ALWAYS_ON
+      ? "always_on" : _shared_sa_policy == SharedSaPolicy::REGATE
+          ? "regate" : "ours";
+  const uint64_t rows = _config.core_config[_id].core_height;
+  const uint64_t columns = _config.core_config[_id].core_width;
+  spdlog::info("SHARED_SA_TIMING {}", json{
+      {"schema_version", 2},
+      {"validation_pass", _compute_pipeline.empty() &&
+                              _shared_remaining_consumers.empty() &&
+                              _shared_sa_events.size() ==
+                                  _shared_sa_instructions},
+      {"core_id", _id},
+      {"policy", policy},
+      {"core_cycles", _core_cycle},
+      {"array_rows", rows},
+      {"array_columns", columns},
+      {"weight_bytes_per_bank", rows * columns * _config.precision},
+      {"two_weight_banks", true},
+      {"bank_ds_wake_hidden_assumption", true},
+      {"pe_break_even_cycles", kSharedPeBreakEvenCycles},
+      {"ours_minimum_off_interval_cycles",
+       kSharedOursMinimumOffInterval},
+      {"sa_instructions", _shared_sa_instructions},
+      {"preloads", _shared_preloads},
+      {"modeled_preload_cycles", _shared_preload_cycles},
+      {"modeled_pe_wake_delay_cycles", _shared_pe_wake_delay_cycles},
+      {"modeled_min_off_lockout_cycles",
+       _shared_min_off_lockout_cycles},
+      {"modeled_min_off_lockout_events",
+       _shared_min_off_lockout_events},
+      {"modeled_bank_wait_cycles", _shared_bank_wait_cycles},
+      {"modeled_sa_completion_cycles", _shared_sa_completion_cycles},
+      {"modeled_fifo_commit_delay_cycles",
+       _shared_fifo_commit_delay_cycles},
+      {"events", _shared_sa_events}}.dump());
+}
+
 void SystolicWS::issue(std::unique_ptr<Tile> tile) {
   Tile* admitted_tile = tile.get();
+  if (_shared_sa_policy != SharedSaPolicy::DISABLED && !admitted_tile->skip) {
+    if (!admitted_tile->sa_metadata_finalized) {
+      throw std::logic_error("shared SA timing requires finalized tile metadata");
+    }
+    std::map<uint64_t, size_t> last_consumer;
+    for (size_t index = 0; index < admitted_tile->sa_descriptors.size();
+         ++index) {
+      last_consumer[admitted_tile->sa_descriptors[index].preload_sequence] =
+          index;
+    }
+    std::set<uint64_t> live_generations;
+    for (size_t index = 0; index < admitted_tile->sa_descriptors.size();
+         ++index) {
+      const SaInstructionDescriptor& descriptor =
+          admitted_tile->sa_descriptors[index];
+      if (descriptor.analytical_preload_boundary) {
+        throw std::logic_error(
+            "shared SA timing requires an explicit physical GEMM_PRELOAD");
+      }
+      if (descriptor.preload_sequence == 0) {
+        throw std::logic_error(
+            "shared SA timing requires a tile-local preload generation");
+      }
+      if (live_generations.insert(descriptor.preload_sequence).second) {
+        if (descriptor.opcode != Opcode::GEMM_PRELOAD) {
+          throw std::logic_error(
+              "shared SA timing generation must start with GEMM_PRELOAD");
+        }
+        if (live_generations.size() > _shared_weight_banks.size()) {
+          throw std::logic_error(
+              "tile needs more than two simultaneous weight generations");
+        }
+      }
+      if (last_consumer.at(descriptor.preload_sequence) == index) {
+        live_generations.erase(descriptor.preload_sequence);
+      }
+    }
+  }
   Core::issue(std::move(tile));
+  if (_shared_sa_policy != SharedSaPolicy::DISABLED && !admitted_tile->skip) {
+    for (const SaInstructionDescriptor& descriptor :
+         admitted_tile->sa_descriptors) {
+      const SharedGeneration generation{
+          admitted_tile->measurement_tile_id, descriptor.preload_sequence};
+      ++_shared_remaining_consumers[generation];
+    }
+  }
 
   if (_sa_event_trace.is_open()) {
     flush_instruction_stall();
@@ -305,6 +599,12 @@ void SystolicWS::cycle() {
       }
     }
     if (front->opcode == Opcode::GEMM || front->opcode == Opcode::GEMM_PRELOAD) {
+      if (_shared_sa_policy != SharedSaPolicy::DISABLED) {
+        schedule_shared_sa_instruction(*front);
+        if (front->opcode == Opcode::GEMM_PRELOAD) {
+          ++_stat_systolic_preload_issue_count;
+        }
+      } else {
       if (!_compute_pipeline.empty()) {
         /* Preload can be hided */
         uint32_t offset = _compute_pipeline.back()->compute_size;
@@ -329,6 +629,7 @@ void SystolicWS::cycle() {
         }
       }
       front->finish_cycle = front->start_cycle + get_inst_compute_cycles(front);
+      }
       record_sa_region_interval(*front);
       if (_hybrid_parameters.enabled &&
           front->opcode == Opcode::GEMM_PRELOAD) {
@@ -3313,6 +3614,20 @@ bool SystolicWS::can_issue_compute(std::unique_ptr<Instruction>& inst)
     const bool sa_instruction =
         inst->opcode == Opcode::GEMM ||
         inst->opcode == Opcode::GEMM_PRELOAD;
+    if (_shared_sa_policy != SharedSaPolicy::DISABLED &&
+        inst->opcode == Opcode::GEMM_PRELOAD &&
+        !shared_preload_bank_available()) {
+      // Do not put an unschedulable preload in the one-entry EX queue: a
+      // different resident tile may first need to issue a bank consumer.
+      // This check can run twice in a core cycle; count the blocked cycle once.
+      if (!_shared_last_bank_block_cycle.has_value() ||
+          *_shared_last_bank_block_cycle != _core_cycle) {
+        ++_shared_bank_wait_cycles;
+        _shared_last_bank_block_cycle = _core_cycle;
+      }
+      _last_compute_block_reason = ComputeBlockReason::PIPELINE_FULL;
+      return false;
+    }
     if (_hybrid_parameters.enabled && inst->opcode == Opcode::GEMM &&
         !_hybrid_pe_state_valid) {
       throw std::logic_error(
